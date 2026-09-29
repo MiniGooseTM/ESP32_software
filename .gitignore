@@ -1,0 +1,13 @@
+# ESP-IDF build output
+build/
+
+# Components fetched by the IDF component manager (restored from dependencies.lock)
+managed_components/
+
+# Backup written by menuconfig
+sdkconfig.old
+
+# Editor / tooling
+.vscode/
+.cache/
+*.swp
