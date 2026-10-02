@@ -32,14 +32,15 @@
 #include "freertos/task.h"
 #include "driver/i2c_master.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "esp_timer.h"
 
 static const char *TAG = "imu_test";
 
 /* I2C wiring */
 #define IMU_I2C_PORT        I2C_NUM_0
-#define IMU_SDA_GPIO        8
-#define IMU_SCL_GPIO        9
+#define IMU_SDA_GPIO        35
+#define IMU_SCL_GPIO        36
 #define IMU_I2C_FREQ_HZ     400000
 #define IMU_I2C_TIMEOUT_MS  100
 
@@ -65,6 +66,11 @@ static const char *TAG = "imu_test";
 
 #define BMI160_CHIP_ID          0xD1
 
+/* Bus idle time the chip needs after every write before the next access:
+   2 us in normal mode, 450 us in suspend mode (datasheet 3.2.4). Writes sent
+   sooner are silently dropped, so always wait the suspend-mode time. */
+#define BMI160_WRITE_IDLE_US    500
+
 /* CMD register opcodes */
 #define BMI160_CMD_START_FOC    0x03
 #define BMI160_CMD_ACC_NORMAL   0x11
@@ -82,8 +88,10 @@ static const char *TAG = "imu_test";
 /* Measurement ranges and the matching sensitivities */
 #define BMI160_ACC_RANGE_4G     0x05
 #define ACC_LSB_PER_G           8192.0f
-#define BMI160_GYR_RANGE_500DPS 0x02
-#define GYR_LSB_PER_DPS         65.6f
+/* A quick turn by hand easily exceeds 500 deg/s; clipped samples make the
+   integrated angle come out short, so use the widest range */
+#define BMI160_GYR_RANGE_2000DPS 0x00
+#define GYR_LSB_PER_DPS         16.4f
 
 /* Offset register units, independent of the selected range */
 #define ACC_OFFSET_MG_PER_LSB   3.9f
@@ -112,7 +120,9 @@ static esp_err_t bmi160_read(uint8_t reg, uint8_t *data, size_t len)
 static esp_err_t bmi160_write(uint8_t reg, uint8_t value)
 {
     uint8_t buf[2] = {reg, value};
-    return i2c_master_transmit(imu_dev, buf, sizeof(buf), IMU_I2C_TIMEOUT_MS);
+    esp_err_t err = i2c_master_transmit(imu_dev, buf, sizeof(buf), IMU_I2C_TIMEOUT_MS);
+    esp_rom_delay_us(BMI160_WRITE_IDLE_US);
+    return err;
 }
 
 static uint8_t bmi160_read_byte(uint8_t reg)
@@ -120,6 +130,17 @@ static uint8_t bmi160_read_byte(uint8_t reg)
     uint8_t value = 0;
     ESP_ERROR_CHECK(bmi160_read(reg, &value, 1));
     return value;
+}
+
+/* Write a config register and read it back, since a wrong range would scale every reading wrongly */
+static void bmi160_write_verified(uint8_t reg, uint8_t value)
+{
+    ESP_ERROR_CHECK(bmi160_write(reg, value));
+    uint8_t readback = bmi160_read_byte(reg);
+    if (readback != value) {
+        ESP_LOGE(TAG, "Register 0x%02X reads 0x%02X after writing 0x%02X", reg, readback, value);
+        abort();
+    }
 }
 
 static void configure_i2c(void)
@@ -169,10 +190,11 @@ static void configure_imu(void)
     }
     ESP_LOGI(TAG, "BMI160 chip ID 0x%02X OK", chip_id);
 
-    ESP_ERROR_CHECK(bmi160_write(BMI160_REG_ACC_CONF, BMI160_ACC_CONF_100HZ));
-    ESP_ERROR_CHECK(bmi160_write(BMI160_REG_ACC_RANGE, BMI160_ACC_RANGE_4G));
-    ESP_ERROR_CHECK(bmi160_write(BMI160_REG_GYR_CONF, BMI160_GYR_CONF_100HZ));
-    ESP_ERROR_CHECK(bmi160_write(BMI160_REG_GYR_RANGE, BMI160_GYR_RANGE_500DPS));
+    bmi160_write_verified(BMI160_REG_ACC_CONF, BMI160_ACC_CONF_100HZ);
+    bmi160_write_verified(BMI160_REG_ACC_RANGE, BMI160_ACC_RANGE_4G);
+    bmi160_write_verified(BMI160_REG_GYR_CONF, BMI160_GYR_CONF_100HZ);
+    bmi160_write_verified(BMI160_REG_GYR_RANGE, BMI160_GYR_RANGE_2000DPS);
+    ESP_LOGI(TAG, "Config verified: acc +-4 g, gyro +-2000 deg/s, both 100 Hz");
 
     /* Power up the sensors; the CMD register ignores new writes while busy,
        so wait out the max start-up time of each (3.8 ms acc, 80 ms gyro) */
@@ -223,7 +245,7 @@ static void calibrate_imu(void)
              FOC_SETTLE_MS);
     vTaskDelay(pdMS_TO_TICKS(FOC_SETTLE_MS));
 
-    ESP_ERROR_CHECK(bmi160_write(BMI160_REG_FOC_CONF, BMI160_FOC_CONF_FLAT));
+    bmi160_write_verified(BMI160_REG_FOC_CONF, BMI160_FOC_CONF_FLAT);
     ESP_ERROR_CHECK(bmi160_write(BMI160_REG_CMD, BMI160_CMD_START_FOC));
 
     int waited_ms = 0;
