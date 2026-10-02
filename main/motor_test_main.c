@@ -22,9 +22,13 @@
 static const char *TAG = "motor_test";
 
 /* Wiring to the TB6612 breakout */
-#define MOTOR_AIN2_GPIO     36
-#define MOTOR_AIN1_GPIO     37
-#define MOTOR_PWMA_GPIO     39
+#define MOTOR_AIN1_GPIO     39
+#define MOTOR_AIN2_GPIO     38
+#define MOTOR_PWMA_GPIO     4
+
+#define MOTOR_BIN1_GPIO     8
+#define MOTOR_BIN2_GPIO     18
+#define MOTOR_PWMB_GPIO     16
 
 /* On-board WS2812 RGB LED (ESP32-S3-DevKitC-1 v1.0) */
 #define RGB_LED_GPIO        48
