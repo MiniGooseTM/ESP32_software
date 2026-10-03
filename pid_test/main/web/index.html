@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Goose PID Tuning</title>
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --border: #dde1e8;
+  --accent: #2f6fde; --ok: #1f9d55; --warn: #c98a00; --bad: #d23c3c; --violet: #8e44ad; --teal: #138d90;
+  --log-bg: #11151c; --log-text: #d6dae2; --grid: #e6e9ef; --zero: #c5cad4;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12151b; --panel: #1b2029; --text: #e3e6ec; --muted: #8b93a5; --border: #2c3340;
+    --accent: #5b8ff0; --ok: #35b56f; --warn: #e0a526; --bad: #ec5b5b; --violet: #b072d0; --teal: #2bb5b8;
+    --log-bg: #0b0e13; --log-text: #cfd4dd; --grid: #262c37; --zero: #3a4250;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+header h1 { font-size: 16px; margin: 0 8px 0 0; }
+.badge { padding: 3px 10px; border-radius: 999px; font-weight: 600; font-size: 12px;
+  text-transform: uppercase; letter-spacing: .04em; background: var(--border); color: var(--text); }
+.badge.idle { background: var(--accent); color: #fff; }
+.badge.running { background: var(--ok); color: #fff; }
+.badge.calibrating { background: var(--warn); color: #000; }
+.badge.fault, .badge.offline { background: var(--bad); color: #fff; }
+#reason { color: var(--muted); }
+main { display: grid; gap: 12px; padding: 12px 16px; grid-template-columns: minmax(0, 320px) minmax(0, 1fr); }
+@media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+.col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-width: 0; }
+.panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; }
+.buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+button { font: inherit; font-weight: 600; padding: 9px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); cursor: pointer; }
+button:active { transform: translateY(1px); }
+button.start { background: var(--ok); color: #fff; border-color: transparent; }
+button.stop { background: var(--bad); color: #fff; border-color: transparent; }
+button.small { padding: 4px 10px; font-weight: 500; }
+.hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+.params { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px 8px; align-items: center; }
+.params label { font-weight: 600; }
+.params .unit { color: var(--muted); font-size: 12px; }
+.params input { width: 100%; font: inherit; font-variant-numeric: tabular-nums; padding: 5px 6px; border-radius: 4px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+.params input.pending { border-color: var(--warn); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.cell { background: var(--bg); border-radius: 6px; padding: 6px 8px; min-width: 0; }
+.cell .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.cell .v { font-variant-numeric: tabular-nums; font-weight: 600; overflow-wrap: anywhere; }
+.plot-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.plot-tools label { color: var(--muted); }
+.plot-tools select { font: inherit; padding: 3px; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); }
+canvas { width: 100%; display: block; }
+#plot-tilt { height: 200px; }
+#plot-u { height: 170px; margin-top: 6px; }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 4px; flex-wrap: wrap; }
+.legend i { display: inline-block; width: 10px; height: 3px; vertical-align: middle; margin-right: 4px; }
+#log { background: var(--log-bg); color: var(--log-text); font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  height: 260px; overflow: auto; padding: 8px; border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#rec-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Goose PID</h1>
+  <span id="conn" class="badge offline">offline</span>
+  <span id="state" class="badge">-</span>
+  <span id="reason"></span>
+</header>
+
+<main>
+  <div class="col">
+    <section class="panel">
+      <h2>Robot</h2>
+      <div class="buttons">
+        <button class="start" id="btn-start">Start</button>
+        <button class="stop" id="btn-stop">Stop</button>
+        <button id="btn-trim">Set trim here</button>
+        <button id="btn-calib">Calibrate IMU</button>
+      </div>
+      <div class="hint">Space / Esc = stop. "Set trim here" takes the current tilt as the balance point, so hold the robot where it balances by itself.</div>
+    </section>
+
+    <section class="panel">
+      <h2>Gains</h2>
+      <div class="params" id="params"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="small" id="btn-save">Save to flash</button>
+        <span class="hint" style="margin:0">Changes apply immediately; save keeps them across reboots (only while stopped).</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Record</h2>
+      <div class="row">
+        <button class="small" id="btn-rec">Start recording</button>
+        <button class="small" id="btn-csv">Download CSV</button>
+        <span id="rec-count">0 samples</span>
+      </div>
+      <div class="hint">Records every control step: t_ms, tilt, setpoint, rate, P, I, D, u.</div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="panel">
+      <h2>Live</h2>
+      <div class="grid" id="tel"></div>
+    </section>
+
+    <section class="panel">
+      <div class="plot-tools">
+        <label for="window">window</label>
+        <select id="window"><option>2</option><option selected>5</option><option>10</option></select>
+        <label for="tilt-range">tilt range &plusmn;</label>
+        <select id="tilt-range"><option>2</option><option>5</option><option selected>10</option><option>20</option><option>45</option></select>
+        <button class="small" id="btn-pause">Pause</button>
+      </div>
+      <canvas id="plot-tilt"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--accent)"></i>tilt (deg)</span>
+        <span><i style="background:var(--muted)"></i>setpoint (deg)</span>
+        <span><i style="background:var(--teal)"></i>rate / 10 (deg/s)</span>
+      </div>
+      <canvas id="plot-u"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--text)"></i>u (motor)</span>
+        <span><i style="background:var(--ok)"></i>P</span>
+        <span><i style="background:var(--warn)"></i>I</span>
+        <span><i style="background:var(--violet)"></i>D</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Log</h2>
+      <div class="row" style="margin-bottom:8px">
+        <label><input type="checkbox" id="autoscroll" checked> autoscroll</label>
+        <button class="small" id="log-clear">Clear</button>
+      </div>
+      <pre id="log"></pre>
+    </section>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+
+/* ---- parameters ---- */
+const PARAMS = [
+  ["kp", "Kp", "per deg", 0.005],
+  ["ki", "Ki", "per deg·s", 0.005],
+  ["kd", "Kd", "per deg/s", 0.0002],
+  ["kv", "Kv", "deg per rad/s", 0.05],
+  ["trim", "trim", "deg", 0.1],
+  ["out_limit", "out limit", "0..1", 0.05],
+  ["i_limit", "I limit", "0..1", 0.05],
+  ["friction", "friction", "0..0.9", 0.01],
+  ["sp_limit", "sp limit", "deg", 0.5],
+];
+const inputs = {};
+const paramsEl = $("params");
+for (const [name, label, unit, step] of PARAMS) {
+  const l = document.createElement("label");
+  l.textContent = label;
+  l.htmlFor = "p-" + name;
+  const inp = document.createElement("input");
+  inp.type = "number";
+  inp.id = "p-" + name;
+  inp.step = step;
+  inp.addEventListener("change", () => sendParam(name, inp));
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") sendParam(name, inp); });
+  const u = document.createElement("span");
+  u.className = "unit";
+  u.textContent = unit;
+  paramsEl.append(l, inp, u);
+  inputs[name] = inp;
+}
+function sendParam(name, inp) {
+  const v = parseFloat(inp.value);
+  if (!Number.isFinite(v)) return;
+  inp.classList.add("pending");
+  inp.dataset.sentAt = Date.now();
+  send(`set ${name} ${v}`);
+}
+function syncParams(p) {
+  for (const [name] of PARAMS) {
+    const inp = inputs[name];
+    if (document.activeElement === inp) continue;
+    const v = p[name];
+    /* Give a just-sent value a moment to arrive; after that the robot's
+       value wins (it may have clamped it) */
+    const waiting = Date.now() - (+inp.dataset.sentAt || 0) < 1000;
+    if (inp.classList.contains("pending") && waiting
+        && Math.abs(parseFloat(inp.value) - v) > 1e-6 * Math.max(1, Math.abs(v))) continue;
+    inp.classList.remove("pending");
+    if (parseFloat(inp.value) !== v) inp.value = +v.toPrecision(5);
+  }
+}
+
+/* ---- connection ---- */
+let ws = null;
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => setConn(true);
+  ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (ev) => {
+    const d = ev.data, kind = d[0], body = d.slice(1);
+    if (kind === "S") { try { onSamples(JSON.parse(body)); } catch (e) {} }
+    else if (kind === "T") { try { onStatus(JSON.parse(body)); } catch (e) {} }
+    else if (kind === "L") appendLog(body);
+  };
+}
+function setConn(up) {
+  $("conn").textContent = up ? "connected" : "offline";
+  $("conn").className = "badge " + (up ? "running" : "offline");
+}
+function send(s) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(s); }
+setInterval(() => send("ping"), 100);   /* heartbeat */
+
+/* ---- buttons ---- */
+$("btn-start").onclick = () => send("start");
+$("btn-stop").onclick = () => send("stop");
+$("btn-trim").onclick = () => send("trim");
+$("btn-calib").onclick = () => send("calib");
+$("btn-save").onclick = () => send("save");
+document.addEventListener("keydown", (e) => {
+  if (e.key === " " || e.key === "Escape") {
+    if (e.target.tagName === "INPUT" && e.key === " ") return;
+    e.preventDefault();
+    send("stop");
+  }
+});
+
+/* ---- status ---- */
+const f = (v, n = 2) => (typeof v === "number" ? v.toFixed(n) : "-");
+const FIELDS = [
+  ["tilt", (t) => `${f(t.tilt, 2)}°`],
+  ["rate", (t) => `${f(t.rate, 1)}°/s`],
+  ["motor u", (t) => f(t.u, 3)],
+  ["wheels (rad/s)", (t) => `${f(t.wheel[0], 1)}, ${f(t.wheel[1], 1)}`],
+  ["loop", (t) => `${t.hz} Hz`],
+  ["jitter / busy max", (t) => `${f(t.jitter_us_max, 0)} / ${f(t.busy_us_max, 0)} µs`],
+  ["overruns", (t) => `${t.overruns}`],
+  ["IMU errors", (t) => `${t.imu_errors}`],
+  ["samples dropped", (t) => `${t.dropped}`],
+];
+const cells = FIELDS.map(([k]) => {
+  const c = document.createElement("div");
+  c.className = "cell";
+  c.innerHTML = `<div class="k">${k}</div><div class="v">-</div>`;
+  $("tel").appendChild(c);
+  return c.lastChild;
+});
+let loopHz = 200;
+function onStatus(t) {
+  FIELDS.forEach(([, fn], i) => { cells[i].textContent = fn(t); });
+  const st = $("state");
+  st.textContent = t.state;
+  st.className = "badge " + (t.state === "idle" && t.fault ? "fault" : t.state);
+  $("reason").textContent = t.reason ? `last stop: ${t.reason}` : "";
+  loopHz = t.hz;
+  syncParams(t.params);
+}
+
+/* ---- samples: [t_ms, tilt, sp, rate, p, i, d, u] ---- */
+const MAX_KEEP = 10 * 1000;   /* enough for 10 s at up to 1 kHz */
+let buf = [];
+let paused = false;
+let recording = false;
+let recorded = [];
+function onSamples(rows) {
+  if (recording) {
+    for (const r of rows) recorded.push(r);
+    $("rec-count").textContent = `${recorded.length} samples`;
+  }
+  if (paused) return;
+  for (const r of rows) buf.push(r);
+  if (buf.length > MAX_KEEP) buf = buf.slice(buf.length - MAX_KEEP);
+}
+$("btn-pause").onclick = () => {
+  paused = !paused;
+  $("btn-pause").textContent = paused ? "Resume" : "Pause";
+};
+$("btn-rec").onclick = () => {
+  recording = !recording;
+  if (recording) { recorded = []; $("rec-count").textContent = "0 samples"; }
+  $("btn-rec").textContent = recording ? "Stop recording" : "Start recording";
+};
+$("btn-csv").onclick = () => {
+  if (!recorded.length) return;
+  const lines = ["t_ms,tilt_deg,setpoint_deg,rate_dps,p,i,d,u"];
+  for (const r of recorded) lines.push(r.join(","));
+  const blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `pid_${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+
+/* ---- plots ---- */
+function color(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function setupCanvas(c) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+    c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+  }
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  return [g, w, h];
+}
+function drawAxes(g, w, h, range, unit) {
+  g.font = "11px system-ui, sans-serif";
+  g.fillStyle = color("--muted");
+  g.lineWidth = 1;
+  for (const frac of [-1, -0.5, 0, 0.5, 1]) {
+    const y = h / 2 - frac * (h / 2 - 6);
+    g.strokeStyle = frac === 0 ? color("--zero") : color("--grid");
+    g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
+    if (frac !== 0) g.fillText(`${+(frac * range).toFixed(2)}${unit}`, 4, y + (frac > 0 ? 11 : -3));
+  }
+}
+function drawSeries(g, w, h, rows, tEnd, span, col, scale, cssColor) {
+  g.strokeStyle = color(cssColor);
+  g.lineWidth = 1.5;
+  g.beginPath();
+  let started = false;
+  for (const r of rows) {
+    const x = w - (tEnd - r[0]) / span * w;
+    if (x < 0) continue;
+    const v = Math.max(-1, Math.min(1, r[col] / scale));
+    const y = h / 2 - v * (h / 2 - 6);
+    if (started) g.lineTo(x, y); else { g.moveTo(x, y); started = true; }
+  }
+  g.stroke();
+}
+function draw() {
+  const span = parseFloat($("window").value) * 1000;
+  const range = parseFloat($("tilt-range").value);
+  const tEnd = buf.length ? buf[buf.length - 1][0] : 0;
+  const rows = buf.filter((r) => r[0] >= tEnd - span);
+
+  let [g, w, h] = setupCanvas($("plot-tilt"));
+  drawAxes(g, w, h, range, "°");
+  drawSeries(g, w, h, rows, tEnd, span, 3, range * 10, "--teal");
+  drawSeries(g, w, h, rows, tEnd, span, 2, range, "--muted");
+  drawSeries(g, w, h, rows, tEnd, span, 1, range, "--accent");
+
+  [g, w, h] = setupCanvas($("plot-u"));
+  drawAxes(g, w, h, 1, "");
+  drawSeries(g, w, h, rows, tEnd, span, 4, 1, "--ok");
+  drawSeries(g, w, h, rows, tEnd, span, 5, 1, "--warn");
+  drawSeries(g, w, h, rows, tEnd, span, 6, 1, "--violet");
+  drawSeries(g, w, h, rows, tEnd, span, 7, 1, "--text");
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+/* ---- log ---- */
+const logEl = $("log");
+const ANSI = /\x1b\[[0-9;]*m/g;
+function appendLog(text) {
+  logEl.textContent += text.replace(ANSI, "");
+  if (logEl.textContent.length > 200000) logEl.textContent = logEl.textContent.slice(-100000);
+  if ($("autoscroll").checked) logEl.scrollTop = logEl.scrollHeight;
+}
+$("log-clear").onclick = () => { logEl.textContent = ""; };
+
+connect();
+</script>
+</body>
+</html>
