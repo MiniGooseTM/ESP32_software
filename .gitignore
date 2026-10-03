@@ -11,3 +11,6 @@ sdkconfig.old
 .vscode/
 .cache/
 *.swp
+
+# Host build of robot/test/policy_host_test.c
+robot/test/policy_host_test

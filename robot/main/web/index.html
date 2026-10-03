@@ -32,7 +32,7 @@ header h1 { font-size: 16px; margin: 0 8px 0 0; }
 .badge.fault { background: var(--bad); color: #fff; }
 .badge.offline { background: var(--bad); color: #fff; }
 #reason { color: var(--muted); }
-#placeholder { color: var(--warn); font-weight: 600; }
+#policy-warn { color: var(--warn); font-weight: 600; }
 main { display: grid; gap: 12px; padding: 12px 16px;
   grid-template-columns: minmax(0, 340px) minmax(0, 1fr); }
 @media (max-width: 820px) { main { grid-template-columns: minmax(0, 1fr); } }
@@ -40,6 +40,10 @@ main { display: grid; gap: 12px; padding: 12px 16px;
 .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; }
 .col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .buttons { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.buttons.two { grid-template-columns: 1fr 1fr; margin-top: 8px; }
+button:disabled { opacity: .5; cursor: default; }
+input[type=file] { font: inherit; max-width: 100%; }
+#policy-info { overflow-wrap: anywhere; }
 button { font: inherit; font-weight: 600; padding: 10px; border-radius: 6px; border: 1px solid var(--border);
   background: var(--bg); color: var(--text); cursor: pointer; }
 button:active { transform: translateY(1px); }
@@ -81,7 +85,7 @@ input[type=range] { flex: 1; min-width: 120px; }
   <span id="conn" class="badge offline">offline</span>
   <span id="state" class="badge">-</span>
   <span id="reason"></span>
-  <span id="placeholder"></span>
+  <span id="policy-warn"></span>
 </header>
 
 <main>
@@ -105,6 +109,17 @@ input[type=range] { flex: 1; min-width: 120px; }
       </div>
       <div class="row readout">command: v <span id="cmd-v">0.00</span> m/s, &omega; <span id="cmd-w">0.00</span> rad/s</div>
       <div class="hint">Drag the pad, or use W A S D / arrow keys.</div>
+    </section>
+
+    <section class="panel">
+      <h2>Policy</h2>
+      <div class="readout" id="policy-info">-</div>
+      <div class="row"><input type="file" id="policy-file" accept=".bin"></div>
+      <div class="buttons two">
+        <button id="btn-upload">Upload</button>
+        <button id="btn-builtin">Use built-in</button>
+      </div>
+      <div class="hint" id="policy-status">Upload <code>models/policy.bin</code> from <code>make export</code> with the robot stopped. It is checked before it replaces the current policy and stays after a reboot.</div>
     </section>
 
     <section class="panel" id="manual-panel">
@@ -133,7 +148,7 @@ input[type=range] { flex: 1; min-width: 120px; }
     </section>
 
     <section class="panel">
-      <h2>Observation</h2>
+      <h2>Observation (newest frame)</h2>
       <div id="obs">-</div>
     </section>
 
@@ -182,6 +197,31 @@ function stop() {
   setPad(0, 0); keys.clear();
   send("stop");
 }
+
+/* ---- policy upload ---- */
+let policyIdle = false, policyPending = false;
+function updatePolicyButtons() {
+  $("btn-upload").disabled = $("btn-builtin").disabled = !policyIdle || policyPending;
+}
+async function policyRequest(method, body) {
+  policyPending = true;
+  updatePolicyButtons();
+  $("policy-status").textContent = body ? "Uploading and checking..." : "Switching to the built-in policy...";
+  try {
+    const r = await fetch("/policy", { method, body });
+    $("policy-status").textContent = await r.text();
+  } catch (e) {
+    $("policy-status").textContent = `Request failed: ${e}`;
+  }
+  policyPending = false;
+  updatePolicyButtons();
+}
+$("btn-upload").onclick = () => {
+  const file = $("policy-file").files[0];
+  if (!file) { $("policy-status").textContent = "Choose a policy.bin first."; return; }
+  policyRequest("POST", file);
+};
+$("btn-builtin").onclick = () => policyRequest("DELETE");
 
 /* ---- drive pad + keyboard ---- */
 let padX = 0, padY = 0;           /* -1..1, y up positive */
@@ -255,7 +295,7 @@ setInterval(() => {
 const f = (v, n = 2) => (typeof v === "number" ? v.toFixed(n) : "-");
 const vec = (a, n = 2) => (a || []).map((x) => f(x, n)).join(", ");
 const FIELDS = [
-  ["pitch", (t) => `${f(t.pitch, 1)}°`],
+  ["pitch (fwd −)", (t) => `${f(t.pitch, 1)}°`],
   ["pitch rate", (t) => `${f(t.pitch_rate, 0)}°/s`],
   ["action A, B", (t) => vec(t.act)],
   ["command v, ω", (t) => vec(t.cmd)],
@@ -269,6 +309,9 @@ const FIELDS = [
   ["IMU errors", (t) => `${t.imu_errors}`],
   ["free heap", (t) => `${(t.heap / 1024).toFixed(0)} KB`],
 ];
+/* ACTOR_FRAME_FIELDS of the training environment */
+const OBS_NAMES = ["v_cmd", "ω_cmd", "roll", "pitch", "roll rate", "pitch rate", "yaw rate",
+                   "wheel L", "wheel R", "prev act L", "prev act R"];
 const tel = $("tel");
 const cells = FIELDS.map(([k]) => {
   const c = document.createElement("div");
@@ -284,8 +327,13 @@ function onTelemetry(t) {
   st.textContent = t.state;
   st.className = "badge " + (t.state === "idle" && t.fault ? "fault" : t.state);
   $("reason").textContent = t.reason ? `last stop: ${t.reason}` : "";
-  $("placeholder").textContent = t.placeholder ? "placeholder policy" : "";
-  $("obs").textContent = `[${vec(t.obs, 3)}]`;
+  $("policy-warn").textContent = t.policy_ok ? "" : "no usable policy, see log";
+  $("policy-info").textContent = t.policy
+    ? `${t.policy_src}: ${t.policy} (CRC ${t.policy_crc})${t.policy_ok ? "" : " - NOT usable"}`
+    : "none";
+  policyIdle = t.state === "idle" && !t.policy_busy;
+  updatePolicyButtons();
+  $("obs").textContent = (t.obs || []).map((x, i) => `${OBS_NAMES[i] || i} ${f(x, 3)}`).join("   ");
   hist.push([t.pitch, t.act[0], t.act[1]]);
   if (hist.length > HISTORY) hist.shift();
 }

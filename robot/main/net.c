@@ -4,7 +4,13 @@
    http://192.168.4.1 once connected. The page talks to the robot over a
    WebSocket at /ws.
 
-   Browser -> robot, one text command per frame:
+   HTTP:
+     GET    /          the web page
+     POST   /policy    store the body (a policy file from `make export`) in
+                       the policy partition and switch to it, if it checks out
+     DELETE /policy    erase the uploaded policy, back to the built-in one
+
+   Browser -> robot over the WebSocket, one text command per frame:
      cmd <lin m/s> <ang rad/s>   velocity command, also the heartbeat
      act <a> <b>                 drive motors directly (manual test mode)
      start | stop | calib | ping
@@ -44,6 +50,8 @@ static const char *TAG = "net";
 #define MAX_IN_FLIGHT       6     /* queued broadcasts before new ones are dropped */
 #define NET_TX_STACK        4096
 #define NET_TX_PRIORITY     5
+#define UPLOAD_CHUNK_BYTES  4096
+#define UPLOAD_RECV_RETRIES 5     /* receive timeouts tolerated during an upload */
 
 extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[] asm("_binary_index_html_end");
@@ -159,6 +167,89 @@ static esp_err_t ws_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t send_text(httpd_req_t *req, const char *status, const char *text)
+{
+    httpd_resp_set_status(req, status);
+    httpd_resp_set_type(req, "text/plain");
+    return httpd_resp_sendstr(req, text);
+}
+
+/* Stream the request body into the policy partition, then check it there */
+static const char *store_upload(httpd_req_t *req)
+{
+    char *chunk = malloc(UPLOAD_CHUNK_BYTES);
+    if (!chunk) {
+        return "out of memory";
+    }
+    const char *err = policy_store_begin() == ESP_OK ? NULL : "can't erase the policy partition";
+    size_t left = req->content_len;
+    int retries = 0;
+    while (!err && left > 0) {
+        int n = httpd_req_recv(req, chunk, left < UPLOAD_CHUNK_BYTES ? left : UPLOAD_CHUNK_BYTES);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT && ++retries <= UPLOAD_RECV_RETRIES) {
+            continue;
+        }
+        if (n <= 0) {
+            err = "upload interrupted";
+        } else if (policy_store_write(chunk, n) != ESP_OK) {
+            err = "flash write failed";
+        } else {
+            left -= n;
+        }
+    }
+    free(chunk);
+    return err ? err : policy_store_check(control_check_policy);
+}
+
+/* Reply with the policy now in use */
+static esp_err_t send_policy_result(httpd_req_t *req, const char *err)
+{
+    control_telemetry_t t;
+    control_get_telemetry(&t);
+    char msg[192];
+    if (err) {
+        snprintf(msg, sizeof(msg), "Rejected: %s. Now using the %s policy '%s'.", err,
+                 t.policy_source, t.policy_name);
+        return send_text(req, "400 Bad Request", msg);
+    }
+    snprintf(msg, sizeof(msg), "Now using the %s policy '%s' (CRC %08lx)%s.", t.policy_source,
+             t.policy_name, (unsigned long)t.policy_crc, t.policy_ok ? "" : ", but it is NOT usable");
+    return send_text(req, "200 OK", msg);
+}
+
+static esp_err_t policy_upload_handler(httpd_req_t *req)
+{
+    if (req->content_len == 0 || req->content_len > policy_store_capacity()) {
+        return send_text(req, "400 Bad Request", "No policy file, or larger than the policy partition.");
+    }
+    const char *err = control_begin_policy_update();
+    if (err) {
+        return send_text(req, "409 Conflict", err);
+    }
+    ESP_LOGI(TAG, "Receiving a policy (%u bytes)", (unsigned)req->content_len);
+    err = store_upload(req);
+    if (err) {
+        ESP_LOGW(TAG, "Policy upload rejected: %s", err);
+        /* A half-written or bad file must not be picked up at the next boot */
+        policy_store_erase();
+    }
+    control_reload_policy();
+    control_end_policy_update();
+    return send_policy_result(req, err);
+}
+
+static esp_err_t policy_delete_handler(httpd_req_t *req)
+{
+    const char *err = control_begin_policy_update();
+    if (err) {
+        return send_text(req, "409 Conflict", err);
+    }
+    err = policy_store_erase() == ESP_OK ? NULL : "can't erase the policy partition";
+    control_reload_policy();
+    control_end_policy_update();
+    return send_policy_result(req, err);
+}
+
 static void on_session_close(httpd_handle_t hd, int fd)
 {
     if (httpd_ws_get_fd_info(hd, fd) == HTTPD_WS_CLIENT_WEBSOCKET) {
@@ -175,7 +266,7 @@ static void http_start(void)
     config.lru_purge_enable = true;
     config.send_wait_timeout = 1;
     config.close_fn = on_session_close;
-    config.stack_size = 6144;
+    config.stack_size = 8192;   /* the policy upload check runs here */
     ESP_ERROR_CHECK(httpd_start(&server, &config));
 
     static const httpd_uri_t index_uri = {
@@ -189,8 +280,20 @@ static void http_start(void)
         .handler = ws_handler,
         .is_websocket = true,
     };
+    static const httpd_uri_t policy_upload_uri = {
+        .uri = "/policy",
+        .method = HTTP_POST,
+        .handler = policy_upload_handler,
+    };
+    static const httpd_uri_t policy_delete_uri = {
+        .uri = "/policy",
+        .method = HTTP_DELETE,
+        .handler = policy_delete_handler,
+    };
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &index_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ws_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &policy_upload_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &policy_delete_uri));
 }
 
 /* ---- broadcasting ------------------------------------------------------- */
@@ -263,7 +366,8 @@ static ws_msg_t *build_telemetry(void)
                   "\"wheel\":[%.2f,%.2f],\"cmd\":[%.2f,%.2f],\"act\":[%.3f,%.3f],"
                   "\"infer_us\":%.1f,\"infer_us_max\":%.1f,\"busy_us_max\":%.0f,"
                   "\"period_us\":%.1f,\"jitter_us_max\":%.0f,\"overruns\":%lu,"
-                  "\"ticks\":%lu,\"imu_errors\":%lu,\"placeholder\":%d,\"hz\":%d,"
+                  "\"ticks\":%lu,\"imu_errors\":%lu,\"policy\":\"%s\",\"policy_src\":\"%s\",\"policy_crc\":\"%08lx\","
+                  "\"policy_ok\":%d,\"policy_busy\":%d,\"hz\":%d,"
                   "\"heap\":%lu,\"obs\":[",
                   control_state_name(t.state), t.stop_reason, t.fault,
                   t.pitch_deg, t.pitch_rate_dps,
@@ -271,7 +375,8 @@ static ws_msg_t *build_telemetry(void)
                   t.wheel_vel[0], t.wheel_vel[1], t.cmd_lin, t.cmd_ang, t.act[0], t.act[1],
                   t.infer_us, t.infer_us_max, t.busy_us_max,
                   t.period_us_avg, t.jitter_us_max, (unsigned long)t.overruns,
-                  (unsigned long)t.ticks, (unsigned long)t.imu_errors, t.policy_placeholder, CONTROL_HZ,
+                  (unsigned long)t.ticks, (unsigned long)t.imu_errors, t.policy_name, t.policy_source,
+                  (unsigned long)t.policy_crc, t.policy_ok, t.policy_busy, CONTROL_HZ,
                   (unsigned long)esp_get_free_heap_size());
     for (int i = 0; i < t.obs_dim && p < end - 16; i++) {
         p += snprintf(p, end - p, i ? ",%.3f" : "%.3f", t.obs[i]);

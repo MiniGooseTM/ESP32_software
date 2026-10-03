@@ -4,10 +4,11 @@
    Core 0: WiFi access point, web interface, log streaming, status LED.
 
    See config.h for pins, rates and limits, control.c for the observation
-   the policy sees, and tools/export_policy.py for loading a trained policy.
+   the policy sees, and README.md for loading a trained policy.
 */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "led_strip.h"
 #include "nvs_flash.h"
@@ -85,6 +86,7 @@ void app_main(void)
     net_start();
 
     xTaskCreatePinnedToCore(status_led_task, "status_led", 3072, NULL, 2, NULL, NET_CORE);
-    ESP_LOGI(TAG, "Started: control on core %d at %d Hz, network on core %d",
-             CONTROL_CORE, CONTROL_HZ, NET_CORE);
+    ESP_LOGI(TAG, "Started: control on core %d at %d Hz, network on core %d, %u KB internal RAM free",
+             CONTROL_CORE, CONTROL_HZ, NET_CORE,
+             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
 }

@@ -30,7 +30,10 @@
 /* Safety                                                                    */
 /* ------------------------------------------------------------------------ */
 
-/* Motors are cut if the estimated pitch exceeds this (robot has fallen) */
+/* Motors are cut if the estimated pitch or roll exceeds this (robot has
+   fallen). While the policy drives, its training tilt limit applies instead
+   if it is smaller (0.6 rad = 34 deg for the current policy): the policy has
+   never seen anything past it. */
 #define FALL_ANGLE_DEG              45.0f
 /* "start" is refused unless the robot is within this angle of upright */
 #define START_MAX_ANGLE_DEG         20.0f
@@ -44,9 +47,23 @@
 /* Apply the fall cutoff in manual (motor test) mode too */
 #define MANUAL_FALL_CUTOFF          1
 
-/* Clamp for incoming velocity commands */
-#define CMD_MAX_LIN_VEL             1.0f    /* m/s */
-#define CMD_MAX_ANG_VEL             4.0f    /* rad/s */
+/* ------------------------------------------------------------------------ */
+/* Policy interface: must match the training environment                     */
+/* (software_stack/src/self_balancing_robot)                                 */
+/* ------------------------------------------------------------------------ */
+
+/* Full command range (CurriculumConfig.command_limits). Incoming commands
+   are clamped to it and then scaled down together so the outer wheel needs
+   at most CMD_MAX_LIN_VEL, as wheel_feasible_command() does in training.
+   The observation divides the command by these. */
+#define CMD_MAX_LIN_VEL             0.3f    /* m/s */
+#define CMD_MAX_ANG_VEL             1.5f    /* rad/s */
+
+/* Half the distance between the wheel centres in the MuJoCo model */
+#define WHEEL_HALF_TRACK_M          0.0645f
+/* Motor no-load speed (actuator ctrlrange in the MuJoCo model); the
+   observation divides the wheel velocities by it */
+#define WHEEL_MAX_SPEED_RAD_S       19.4f
 
 /* ------------------------------------------------------------------------ */
 /* Motors (TB6612)                                                           */
@@ -60,8 +77,10 @@
 #define MOTOR_BIN2_GPIO             15
 #define MOTOR_PWMB_GPIO             16
 
-/* Policy action 0 drives motor A, action 1 drives motor B. Flip a sign so
-   that +1 drives that wheel forward (the two motors are mirrored). */
+/* Policy action 0 drives motor A, action 1 drives motor B. As in training,
+   motor A must be the LEFT wheel and motor B the right one (seen from
+   behind, looking forward); encoder A/B follow the same order. Flip a sign
+   so that +1 drives that wheel forward (the two motors are mirrored). */
 #define MOTOR_A_SIGN                (-1)
 #define MOTOR_B_SIGN                (-1)
 
@@ -110,15 +129,28 @@
 #define IMU_ODR_CONF                0x2B
 #endif
 
-/* Tilt estimate (forward/backward lean, positive forward). Axis indices
-   0=x 1=y 2=z. The IMU is mounted x right, y forward, z up, so the robot
-   tilts about the IMU's x axis (its roll). A forward lean is a negative
-   rotation about x by the right-hand rule, hence the -1 gyro sign.
-   Check in the web UI: leaning the robot forward must read positive. */
-#define IMU_TILT_GYRO_AXIS          0       /* gyro axis the robot tilts about */
-#define IMU_TILT_GYRO_SIGN          (-1.0f)
-#define IMU_FWD_ACC_AXIS            1       /* accel axis pointing forward */
-#define IMU_UP_ACC_AXIS             2       /* accel axis pointing up when upright */
+/* IMU mounting: the IMU axis (0=x 1=y 2=z) and sign giving each axis of the
+   robot body frame, which is the frame the policy was trained in:
+   x right (along the axle), y forward, z up. The IMU is mounted x right,
+   y forward, z up, so this is the identity.
+
+   The robot firmware uses the training environment's tilt convention:
+     pitch = rotation about body x, a forward lean reads NEGATIVE
+     roll  = rotation about body y, leaning to the right reads positive
+   Check in the web UI (Observation panel) after changing these. */
+#define IMU_BODY_X_AXIS             0
+#define IMU_BODY_X_SIGN             (1.0f)
+#define IMU_BODY_Y_AXIS             1
+#define IMU_BODY_Y_SIGN             (1.0f)
+#define IMU_BODY_Z_AXIS             2
+#define IMU_BODY_Z_SIGN             (1.0f)
+
+/* pid_test's tilt, forward lean positive (its gains assume that). It
+   ignores the accel signs, so these only hold while those are +1. */
+#define IMU_TILT_GYRO_AXIS          IMU_BODY_X_AXIS
+#define IMU_TILT_GYRO_SIGN          (-IMU_BODY_X_SIGN)
+#define IMU_FWD_ACC_AXIS            IMU_BODY_Y_AXIS
+#define IMU_UP_ACC_AXIS             IMU_BODY_Z_AXIS
 
 /* Complementary filter: weight of the integrated gyro vs. the accel angle */
 #define TILT_FILTER_ALPHA           0.98f

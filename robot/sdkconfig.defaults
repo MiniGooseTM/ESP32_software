@@ -7,10 +7,14 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 # Finer vTaskDelay granularity (the control loop itself runs off a hardware timer)
 CONFIG_FREERTOS_HZ=1000
 
+# The module has 16 MB of flash (esptool.py flash_id)
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
 # WiFi + HTTP server make the app ~1 MB, which doesn't fit the default 1 MB
-# app partition. The large single-app table has a 1.5 MB app partition and
-# still fits in 2 MB of flash. Set the real flash size if the module has more.
-CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+# app partition. partitions.csv is the large single-app table (1.5 MB app
+# partition) plus 128 KB for an uploaded policy.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # Web interface: WebSocket for logs, telemetry and commands
 CONFIG_HTTPD_WS_SUPPORT=y

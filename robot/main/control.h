@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "policy.h"
 
 typedef enum {
     CTRL_STATE_INIT,         /* waiting for the IMU */
@@ -21,17 +22,17 @@ typedef struct {
     const char *stop_reason;    /* why the robot last stopped, "" if it hasn't */
     int fault;                  /* last stop was a fault (fall, IMU error, link lost) */
 
-    float pitch_deg;
+    float pitch_deg;            /* forward lean negative, as in training */
     float pitch_rate_dps;
-    float gyro[3];              /* rad/s */
-    float acc[3];               /* m/s^2 */
+    float gyro[3];              /* rad/s, body frame (x right, y forward, z up) */
+    float acc[3];               /* m/s^2, body frame */
     float wheel_vel[2];         /* rad/s, forward positive */
 
     float cmd_lin;              /* active command after timeout handling */
     float cmd_ang;
     float act[2];               /* motor commands sent, [-1, 1] */
     int obs_dim;
-    float obs[CTRL_MAX_OBS];    /* last observation fed to the policy */
+    float obs[CTRL_MAX_OBS];    /* newest observation frame fed to the policy */
 
     /* Timing, maxima over the last second */
     float infer_us;             /* policy forward pass, last */
@@ -42,7 +43,12 @@ typedef struct {
     uint32_t overruns;          /* total ticks missed since boot */
     uint32_t ticks;
     uint32_t imu_errors;        /* total failed IMU reads since boot */
-    int policy_placeholder;
+    char policy_name[sizeof(((policy_file_header_t *)0)->name)];   /* "" if none loaded */
+    const char *policy_source;  /* "built-in", "uploaded" or "none" */
+    uint32_t policy_crc;
+    int policy_ok;              /* loaded, matches the observation, self-test passed */
+    int policy_busy;            /* a policy upload is in progress */
+    uint32_t policy_generation; /* counts policy (re)loads */
 } control_telemetry_t;
 
 /* Create the control task pinned to CONTROL_CORE. It initialises the IMU and
@@ -68,6 +74,26 @@ void control_request_calibrate(void);
 /* Drive the motors directly with a, b in [-1, 1]. Enters MANUAL from IDLE.
    Subject to the same command timeout. */
 void control_set_manual(float a, float b);
+
+/* ---- policy updates, from the web server ----
+   Upload sequence: control_begin_policy_update(), write the partition
+   (policy_store_*), control_reload_policy(), control_end_policy_update(). */
+
+/* Check a policy against this firmware: observation layout, control rate,
+   limits, and its own test vectors. Returns NULL if it can be used,
+   otherwise what is wrong. */
+const char *control_check_policy(const policy_net_t *net);
+
+/* Keep the robot from starting, calibrating or driving manually until
+   control_end_policy_update(), so flash can be written with the motors off.
+   Waits a few control ticks. Returns NULL if the update may go ahead,
+   otherwise why not (robot not idle, another update running). */
+const char *control_begin_policy_update(void);
+void control_end_policy_update(void);
+
+/* Make the control task load the policy again (the uploaded one if it is
+   usable, otherwise the built-in one) and wait until it has. */
+void control_reload_policy(void);
 
 /* Copy of the latest telemetry */
 void control_get_telemetry(control_telemetry_t *out);
