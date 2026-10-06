@@ -60,7 +60,7 @@
 #define CMD_MAX_ANG_VEL             1.5f    /* rad/s */
 
 /* Half the distance between the wheel centres in the MuJoCo model */
-#define WHEEL_HALF_TRACK_M          0.0645f
+#define WHEEL_HALF_TRACK_M          0.0535f
 /* Motor no-load speed (actuator ctrlrange in the MuJoCo model); the
    observation divides the wheel velocities by it */
 #define WHEEL_MAX_SPEED_RAD_S       19.4f
