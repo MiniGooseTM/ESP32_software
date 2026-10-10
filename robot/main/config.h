@@ -43,7 +43,7 @@
    keeps balancing in place with a zero command) */
 #define LINK_LOST_STOP_MS           5000
 /* Consecutive failed IMU reads tolerated before the motors are cut */
-#define IMU_MAX_CONSECUTIVE_ERRORS  3
+#define IMU_MAX_CONSECUTIVE_ERRORS  15
 /* Apply the fall cutoff in manual (motor test) mode too */
 #define MANUAL_FALL_CUTOFF          1
 
