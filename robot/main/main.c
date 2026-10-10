@@ -1,7 +1,8 @@
 /* Two-wheeled balancing robot firmware
 
    Core 1: control loop only (IMU -> policy -> motors at CONTROL_HZ).
-   Core 0: WiFi access point, web interface, log streaming, status LED.
+   Core 0: WiFi access point, web interface, log streaming, status LED,
+           battery monitor.
 
    See config.h for pins, rates and limits, control.c for the observation
    the policy sees, and README.md for loading a trained policy.
@@ -12,6 +13,7 @@
 #include "esp_log.h"
 #include "led_strip.h"
 #include "nvs_flash.h"
+#include "battery.h"
 #include "config.h"
 #include "control.h"
 #include "log_stream.h"
@@ -83,6 +85,7 @@ void app_main(void)
     status_led_init();
 
     control_start();
+    battery_start();
     net_start();
 
     xTaskCreatePinnedToCore(status_led_task, "status_led", 3072, NULL, 2, NULL, NET_CORE);

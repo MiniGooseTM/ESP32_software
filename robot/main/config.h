@@ -166,6 +166,25 @@
 #define IMU_CALIB_SETTLE_MS         1500
 
 /* ------------------------------------------------------------------------ */
+/* Battery (voltage divider into an ADC pin)                                 */
+/* ------------------------------------------------------------------------ */
+
+/* Must be an ADC pin: on the ESP32-S3 only GPIO1-10 (ADC1) and GPIO11-20
+   (ADC2, shared with WiFi, so reads can fail while it transmits). Prefer
+   ADC1. With any other pin the web UI shows no battery reading and the log
+   says why. */
+#define BATTERY_ADC_GPIO            2
+/* Voltage at the pin for a full and an empty battery; the charge is taken
+   as linear in between */
+#define BATTERY_MV_FULL             2260
+#define BATTERY_MV_EMPTY            1900
+/* The web UI warns below this charge */
+#define BATTERY_LOW_PERCENT         15
+#define BATTERY_SAMPLE_MS           250
+/* Low-pass time constant, so the motors' load doesn't make the charge jump */
+#define BATTERY_FILTER_TAU_MS       5000
+
+/* ------------------------------------------------------------------------ */
 /* Status LED (on-board WS2812)                                              */
 /* ------------------------------------------------------------------------ */
 

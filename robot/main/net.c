@@ -39,6 +39,7 @@
 #include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
+#include "battery.h"
 #include "config.h"
 #include "control.h"
 #include "log_stream.h"
@@ -358,6 +359,8 @@ static ws_msg_t *build_telemetry(void)
 {
     control_telemetry_t t;
     control_get_telemetry(&t);
+    int batt_mv, batt_pct;
+    battery_get(&batt_mv, &batt_pct);
 
     ws_msg_t *msg = malloc(sizeof(ws_msg_t) + TELEMETRY_BYTES);
     if (!msg) {
@@ -374,7 +377,7 @@ static ws_msg_t *build_telemetry(void)
                   "\"period_us\":%.1f,\"jitter_us_max\":%.0f,\"overruns\":%lu,"
                   "\"ticks\":%lu,\"imu_errors\":%lu,\"policy\":\"%s\",\"policy_src\":\"%s\",\"policy_crc\":\"%08lx\","
                   "\"policy_ok\":%d,\"policy_busy\":%d,\"hz\":%d,"
-                  "\"heap\":%lu,\"obs\":[",
+                  "\"heap\":%lu,\"batt_mv\":%d,\"batt_pct\":%d,\"batt_low\":%d,\"obs\":[",
                   control_state_name(t.state), t.stop_reason, t.fault,
                   t.pitch_deg, t.pitch_rate_dps,
                   t.gyro[0], t.gyro[1], t.gyro[2], t.acc[0], t.acc[1], t.acc[2],
@@ -383,7 +386,7 @@ static ws_msg_t *build_telemetry(void)
                   t.period_us_avg, t.jitter_us_max, (unsigned long)t.overruns,
                   (unsigned long)t.ticks, (unsigned long)t.imu_errors, t.policy_name, t.policy_source,
                   (unsigned long)t.policy_crc, t.policy_ok, t.policy_busy, CONTROL_HZ,
-                  (unsigned long)esp_get_free_heap_size());
+                  (unsigned long)esp_get_free_heap_size(), batt_mv, batt_pct, BATTERY_LOW_PERCENT);
     for (int i = 0; i < t.obs_dim && p < end - 16; i++) {
         p += snprintf(p, end - p, i ? ",%.3f" : "%.3f", t.obs[i]);
     }

@@ -7,13 +7,13 @@
 <style>
 :root {
   --bg: #f4f5f7; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --border: #dde1e8;
-  --accent: #2f6fde; --ok: #1f9d55; --warn: #c98a00; --bad: #d23c3c; --manual: #8e44ad;
+  --accent: #2f6fde; --ok: #1f9d55; --warn: #c98a00; --orange: #e06b00; --bad: #d23c3c; --manual: #8e44ad;
   --log-bg: #11151c; --log-text: #d6dae2; --plot-grid: #e6e9ef;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #12151b; --panel: #1b2029; --text: #e3e6ec; --muted: #8b93a5; --border: #2c3340;
-    --accent: #5b8ff0; --ok: #35b56f; --warn: #e0a526; --bad: #ec5b5b; --manual: #b072d0;
+    --accent: #5b8ff0; --ok: #35b56f; --warn: #e0a526; --orange: #f0883e; --bad: #ec5b5b; --manual: #b072d0;
     --log-bg: #0b0e13; --log-text: #cfd4dd; --plot-grid: #262c37;
   }
 }
@@ -79,6 +79,35 @@ input[type=range] { flex: 1; min-width: 120px; }
 #csv-status { color: var(--muted); font-size: 12px; }
 .log-tools button { padding: 4px 10px; font-weight: 500; }
 .manual-on { outline: 2px solid var(--manual); }
+[hidden] { display: none !important; }
+/* battery: phone-style icon, fill colour by charge */
+#batt { margin-left: auto; position: relative; width: 58px; height: 26px; padding: 2px; margin-right: 5px;
+  border: 2px solid var(--text); border-radius: 6px; }
+#batt::after { content: ""; position: absolute; right: -6px; top: 6px; width: 4px; height: 10px;
+  background: var(--text); border-radius: 0 2px 2px 0; }
+#batt-fill { height: 100%; width: 0; border-radius: 3px; background: var(--muted);
+  transition: width .6s, background-color .6s; }
+#batt-pct { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text);
+  text-shadow: 0 0 2px var(--panel), 0 0 2px var(--panel), 0 0 3px var(--panel); }
+#batt.full #batt-fill { background: var(--ok); }
+#batt.mid #batt-fill { background: var(--warn); }
+#batt.lowish #batt-fill { background: var(--orange); }
+#batt.low { border-color: var(--bad); animation: batt-blink 1s steps(2, start) infinite; }
+#batt.low::after { background: var(--bad); }
+#batt.low #batt-fill { background: var(--bad); }
+#batt.unknown { opacity: .5; }
+@keyframes batt-blink { to { border-color: transparent; } }
+#batt-banner { position: sticky; top: 0; z-index: 10; padding: 10px 16px; background: var(--bad); color: #fff;
+  font-weight: 700; text-align: center; }
+#batt-popup { position: fixed; z-index: 20; top: 72px; left: 50%; transform: translateX(-50%);
+  width: calc(100% - 32px); max-width: 380px; padding: 18px; border-radius: 10px; text-align: center;
+  background: var(--panel); border: 3px solid var(--bad); box-shadow: 0 10px 40px rgba(0,0,0,.45);
+  animation: batt-pop .5s ease-out; }
+#batt-popup h2 { margin: 0 0 6px; font-size: 20px; color: var(--bad); }
+#batt-popup p { margin: 0 0 14px; }
+@keyframes batt-pop { 0% { transform: translateX(-50%) scale(.6); opacity: 0; }
+  70% { transform: translateX(-50%) scale(1.05); opacity: 1; } 100% { transform: translateX(-50%) scale(1); } }
 </style>
 </head>
 <body>
@@ -88,7 +117,19 @@ input[type=range] { flex: 1; min-width: 120px; }
   <span id="state" class="badge">-</span>
   <span id="reason"></span>
   <span id="policy-warn"></span>
+  <div id="batt" class="unknown" title="no battery reading" role="img" aria-label="battery: no reading">
+    <div id="batt-fill"></div><span id="batt-pct">--</span>
+  </div>
 </header>
+<div id="batt-banner" role="alert" hidden></div>
+<div id="batt-popup" role="alertdialog" aria-labelledby="batt-popup-title" hidden>
+  <h2 id="batt-popup-title">&#9888; Battery low</h2>
+  <p id="batt-popup-text"></p>
+  <div class="buttons two">
+    <button class="stop" id="batt-popup-stop">Stop robot</button>
+    <button id="batt-popup-ok">Dismiss</button>
+  </div>
+</div>
 
 <main>
   <div class="col">
@@ -201,6 +242,7 @@ function connect() {
 function setConn(up) {
   $("conn").textContent = up ? "connected" : "offline";
   $("conn").className = "badge " + (up ? "running" : "offline");
+  if (!up) updateBattery(-1);
 }
 function send(s) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(s); }
 
@@ -265,7 +307,7 @@ const KEYMAP = { w: "f", arrowup: "f", s: "b", arrowdown: "b", a: "l", arrowleft
 document.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT" && e.target.type === "number") return;
   const k = e.key.toLowerCase();
-  if (k === " " || k === "escape") { e.preventDefault(); stop(); return; }
+  if (k === " " || k === "escape") { e.preventDefault(); stop(); $("batt-popup").hidden = true; return; }
   if (KEYMAP[k]) { e.preventDefault(); keys.add(KEYMAP[k]); }
 });
 document.addEventListener("keyup", (e) => { const k = KEYMAP[e.key.toLowerCase()]; if (k) keys.delete(k); });
@@ -324,6 +366,7 @@ const FIELDS = [
   ["overruns", (t) => `${t.overruns}`],
   ["IMU errors", (t) => `${t.imu_errors}`],
   ["free heap", (t) => `${(t.heap / 1024).toFixed(0)} KB`],
+  ["battery", (t) => (t.batt_pct >= 0 ? `${t.batt_pct}% (${t.batt_mv} mV at pin)` : "no reading")],
 ];
 /* ACTOR_FRAME_FIELDS of the training environment */
 const OBS_NAMES = ["v_cmd", "ω_cmd", "roll", "pitch", "roll rate", "pitch rate", "yaw rate",
@@ -352,7 +395,35 @@ function onTelemetry(t) {
   $("obs").textContent = (t.obs || []).map((x, i) => `${OBS_NAMES[i] || i} ${f(x, 3)}`).join("   ");
   hist.push([t.pitch, t.act[0], t.act[1]]);
   if (hist.length > HISTORY) hist.shift();
+  updateBattery(t.batt_pct, t.batt_mv, t.batt_low);
 }
+
+/* ---- battery ---- */
+const BATT_REARM = 3;  /* % above the low limit before the popup can show again */
+let battWarned = false;
+function updateBattery(pct, mv, low) {
+  const known = typeof pct === "number" && pct >= 0;
+  const b = $("batt");
+  b.className = !known ? "unknown" : pct < low ? "low" : pct < 30 ? "lowish" : pct < 50 ? "mid" : "full";
+  $("batt-fill").style.width = known ? `${pct}%` : "0";
+  $("batt-pct").textContent = known ? `${pct}%` : "--";
+  b.title = known ? `battery ${pct}% (${mv} mV at the pin)` : "no battery reading";
+  b.setAttribute("aria-label", known ? `battery ${pct}%` : "battery: no reading");
+
+  const isLow = known && pct < low;
+  $("batt-banner").hidden = !isLow;
+  $("batt-banner").textContent = `\u26A0 Battery low: ${pct}%. Stop the robot and recharge.`;
+  $("batt-popup-text").textContent = `Charge is down to ${pct}%. Stop the robot and recharge the battery soon.`;
+  if (isLow && !battWarned) {
+    battWarned = true;
+    $("batt-popup").hidden = false;
+  } else if (known && pct >= low + BATT_REARM) {
+    battWarned = false;
+    $("batt-popup").hidden = true;
+  }
+}
+$("batt-popup-ok").onclick = () => { $("batt-popup").hidden = true; };
+$("batt-popup-stop").onclick = () => { stop(); $("batt-popup").hidden = true; };
 
 /* ---- plot ---- */
 const HISTORY = 10 * 20;  /* 10 s at the telemetry rate */
