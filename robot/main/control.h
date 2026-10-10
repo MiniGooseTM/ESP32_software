@@ -4,6 +4,7 @@
    either core; none of them block on the control loop. */
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 #include "policy.h"
 
@@ -16,6 +17,7 @@ typedef enum {
 } ctrl_state_t;
 
 #define CTRL_MAX_OBS 64
+#define CTRL_FRAME_DIM 11           /* one observation frame (OBS_FRAME_FIELDS) */
 
 typedef struct {
     ctrl_state_t state;
@@ -50,6 +52,14 @@ typedef struct {
     int policy_busy;            /* a policy upload is in progress */
     uint32_t policy_generation; /* counts policy (re)loads */
 } control_telemetry_t;
+
+/* One control step while the policy drives */
+typedef struct {
+    uint32_t step;                  /* since start: 0 is the first step of a run */
+    uint32_t time_us;               /* since start */
+    float frame[CTRL_FRAME_DIM];    /* newest observation frame fed to the policy */
+    float act[2];                   /* the policy's action, sent to the motors */
+} control_step_t;
 
 /* Create the control task pinned to CONTROL_CORE. It initialises the IMU and
    the loop timer itself, so their interrupts land on that core. */
@@ -99,3 +109,11 @@ void control_reload_policy(void);
 void control_get_telemetry(control_telemetry_t *out);
 
 const char *control_state_name(ctrl_state_t state);
+
+/* Names of the observation frame fields, comma-separated, as in training */
+const char *control_frame_fields(void);
+
+/* Take the oldest logged step; false if there is none. Every step is logged
+   while RUNNING; steps nobody takes in time are dropped, leaving a gap in
+   step. Call from one task only. */
+bool control_take_step(control_step_t *out);

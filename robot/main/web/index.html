@@ -72,9 +72,11 @@ input[type=range] { flex: 1; min-width: 120px; }
 .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 4px; flex-wrap: wrap; }
 .legend i { display: inline-block; width: 10px; height: 3px; vertical-align: middle; margin-right: 4px; }
 #obs { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); overflow-wrap: anywhere; }
-#log { background: var(--log-bg); color: var(--log-text); font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+.term { background: var(--log-bg); color: var(--log-text); font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
   height: 320px; overflow: auto; padding: 8px; border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
-.log-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+#csv { white-space: pre; overflow-wrap: normal; }
+.log-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+#csv-status { color: var(--muted); font-size: 12px; }
 .log-tools button { padding: 4px 10px; font-weight: 500; }
 .manual-on { outline: 2px solid var(--manual); }
 </style>
@@ -158,7 +160,20 @@ input[type=range] { flex: 1; min-width: 120px; }
         <label><input type="checkbox" id="autoscroll" checked> autoscroll</label>
         <button id="log-clear">Clear</button>
       </div>
-      <pre id="log"></pre>
+      <pre id="log" class="term"></pre>
+    </section>
+
+    <section class="panel">
+      <h2>State log (CSV)</h2>
+      <div class="log-tools">
+        <label><input type="checkbox" id="csv-autoscroll" checked> autoscroll</label>
+        <button id="csv-clear">Clear</button>
+        <button id="csv-copy">Copy all</button>
+        <button id="csv-download">Download</button>
+        <span id="csv-status">no rows yet</span>
+      </div>
+      <pre id="csv" class="term"></pre>
+      <div class="hint">One row per control step (100 Hz) while running: the newest observation frame the policy got, as in training, and the action it returned. <code>step</code> restarts at 0 on every start; gaps in it are rows lost on the way.</div>
     </section>
   </div>
 </main>
@@ -180,6 +195,7 @@ function connect() {
     const d = ev.data;
     if (d[0] === "T") { try { onTelemetry(JSON.parse(d.slice(1))); } catch (e) {} }
     else if (d[0] === "L") { appendLog(d.slice(1)); }
+    else if (d[0] === "C") { appendCsv(d.slice(1)); }
   };
 }
 function setConn(up) {
@@ -378,6 +394,82 @@ function appendLog(text) {
   if ($("autoscroll").checked) logEl.scrollTop = logEl.scrollHeight;
 }
 $("log-clear").onclick = () => { logEl.textContent = ""; };
+
+/* ---- state log (CSV) ---- */
+const CSV_MAX_ROWS = 60000;  /* 10 min at 100 Hz; older rows are dropped */
+const csvEl = $("csv");
+const csvHeader = document.createTextNode("");
+csvEl.appendChild(csvHeader);
+const csvChunks = [];        /* [text node, row count] after the header */
+let csvRows = 0, csvMissing = 0, csvTrimmed = false, csvNextStep = null;
+function csvStatus() {
+  $("csv-status").textContent = `${csvRows} rows` + (csvMissing ? `, ${csvMissing} missing` : "")
+    + (csvTrimmed ? `, oldest dropped past ${CSV_MAX_ROWS}` : "");
+}
+function appendCsv(text) {
+  let rows = "", n = 0;
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    if (line.startsWith("step,")) {
+      if (!csvHeader.data) csvHeader.data = line + "\n";
+      continue;
+    }
+    const step = parseInt(line, 10);
+    if (csvNextStep !== null && step > csvNextStep) csvMissing += step - csvNextStep;
+    csvNextStep = step + 1;
+    rows += line + "\n";
+    n++;
+  }
+  if (!n) return;
+  const node = document.createTextNode(rows);
+  csvEl.appendChild(node);
+  csvChunks.push([node, n]);
+  csvRows += n;
+  while (csvRows > CSV_MAX_ROWS) {
+    const [old, k] = csvChunks.shift();
+    old.remove();
+    csvRows -= k;
+    csvTrimmed = true;
+  }
+  csvStatus();
+  if ($("csv-autoscroll").checked) csvEl.scrollTop = csvEl.scrollHeight;
+}
+$("csv-clear").onclick = () => {
+  for (const [node] of csvChunks) node.remove();
+  csvChunks.length = 0;
+  csvRows = csvMissing = 0;
+  csvTrimmed = false;
+  csvStatus();
+};
+/* navigator.clipboard needs https, so fall back to a selected textarea */
+$("csv-copy").onclick = async () => {
+  const text = csvEl.textContent;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      if (!ok) throw new Error("copy refused");
+    }
+    $("csv-status").textContent = `copied ${csvRows} rows`;
+  } catch (e) {
+    $("csv-status").textContent = "copy failed, use Download";
+  }
+};
+$("csv-download").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csvEl.textContent], { type: "text/csv" }));
+  a.download = `goose_state_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
 
 updateManual();
 connect();

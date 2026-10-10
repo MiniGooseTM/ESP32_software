@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/ringbuf.h"
 #include "freertos/task.h"
 #include "driver/gptimer.h"
 #include "esp_attr.h"
@@ -94,8 +95,9 @@ static void push_frame(const float frame[OBS_FRAME_DIM], float obs[OBS_DIM], boo
     memcpy(obs, frame, OBS_FRAME_DIM * sizeof(float));
 }
 
-/* Telemetry carries the newest frame only */
+/* Telemetry and the step log carry the newest frame only */
 _Static_assert(OBS_FRAME_DIM <= CTRL_MAX_OBS, "raise CTRL_MAX_OBS");
+_Static_assert(OBS_FRAME_DIM == CTRL_FRAME_DIM, "update CTRL_FRAME_DIM");
 
 static bool nearly_equal(float a, float b)
 {
@@ -173,6 +175,9 @@ static TaskHandle_t control_task_handle;
 
 static portMUX_TYPE cmd_lock = portMUX_INITIALIZER_UNLOCKED;
 static command_t shared_cmd;
+
+/* control_step_t of every step while running, for the web state log */
+static RingbufHandle_t step_log;
 
 static portMUX_TYPE telemetry_lock = portMUX_INITIALIZER_UNLOCKED;
 static control_telemetry_t shared_telemetry = {
@@ -289,6 +294,20 @@ void control_get_telemetry(control_telemetry_t *out)
     portEXIT_CRITICAL(&telemetry_lock);
 }
 
+const char *control_frame_fields(void) { return OBS_FRAME_FIELDS; }
+
+bool control_take_step(control_step_t *out)
+{
+    size_t size;
+    void *item = xRingbufferReceive(step_log, &size, 0);
+    if (!item) {
+        return false;
+    }
+    memcpy(out, item, sizeof(*out));
+    vRingbufferReturnItem(step_log, item);
+    return true;
+}
+
 const char *control_state_name(ctrl_state_t state)
 {
     switch (state) {
@@ -376,6 +395,8 @@ typedef struct {
     float act[2];
     float obs[OBS_DIM];
     bool obs_restart;           /* refill the history on the next tick */
+    uint32_t run_step;          /* steps since start, for the step log */
+    int64_t run_start_us;
 
     /* timing */
     int64_t last_tick_us;
@@ -660,6 +681,8 @@ static void control_task(void *arg)
                 motors_coast();
                 c.act[0] = c.act[1] = 0.0f;
                 c.obs_restart = true;
+                c.run_step = 0;
+                c.run_start_us = now;
                 c.state = CTRL_STATE_RUNNING;
                 c.stop_reason = "";
                 c.fault = 0;
@@ -714,6 +737,14 @@ static void control_task(void *arg)
                 c.win_infer_max = c.infer_us;
             }
             motors_set(c.act[0], c.act[1]);
+
+            control_step_t step = {
+                .step = c.run_step++,
+                .time_us = (uint32_t)(now - c.run_start_us),
+                .act = {c.act[0], c.act[1]},
+            };
+            memcpy(step.frame, frame, sizeof(step.frame));
+            xRingbufferSend(step_log, &step, sizeof(step), 0);   /* dropped if full */
         } else if (c.state == CTRL_STATE_MANUAL) {
             c.act[0] = cmd.manual[0];
             c.act[1] = cmd.manual[1];
@@ -741,6 +772,8 @@ void control_start(void)
 {
     /* Before the WiFi takes its share of the internal RAM */
     select_policy();
+    step_log = xRingbufferCreate(STATE_LOG_BUFFER_BYTES, RINGBUF_TYPE_NOSPLIT);
+    configASSERT(step_log);
     BaseType_t ok = xTaskCreatePinnedToCore(control_task, "control", CONTROL_TASK_STACK, NULL,
                                             CONTROL_TASK_PRIORITY, NULL, CONTROL_CORE);
     configASSERT(ok == pdPASS);

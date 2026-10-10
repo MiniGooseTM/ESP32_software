@@ -17,6 +17,9 @@
    Robot -> browser, text frames:
      L<log text>                 serial log output
      T{...}                      telemetry JSON
+     C<csv rows>                 state log: one row per control step while
+                                 running, after a header line at the start
+                                 of each run and for a new browser
 
    Everything here runs on core 0: the WiFi and lwIP tasks are pinned there
    by sdkconfig, the HTTP server by its config, and net_tx_task explicitly.
@@ -47,6 +50,9 @@ static const char *TAG = "net";
 #define MAX_CMD_LEN         128
 #define LOG_CHUNK_BYTES     2048
 #define TELEMETRY_BYTES     1536
+#define STATE_CHUNK_BYTES   4096
+/* Room for the header and the longest possible row (13 floats with %.4f) */
+#define STATE_ROW_ROOM      1024
 #define MAX_IN_FLIGHT       6     /* queued broadcasts before new ones are dropped */
 #define NET_TX_STACK        4096
 #define NET_TX_PRIORITY     5
@@ -388,9 +394,43 @@ static ws_msg_t *build_telemetry(void)
     return msg;
 }
 
+/* CSV rows of the logged control steps. NULL if there are none. */
+static ws_msg_t *build_state_rows(bool *header_pending)
+{
+    ws_msg_t *msg = malloc(sizeof(ws_msg_t) + STATE_CHUNK_BYTES);
+    if (!msg) {
+        return NULL;
+    }
+    char *p = msg->data;
+    char *end = msg->data + STATE_CHUNK_BYTES;
+    *p++ = 'C';
+    control_step_t s;
+    while (end - p >= STATE_ROW_ROOM && control_take_step(&s)) {
+        if (s.step == 0 || *header_pending) {
+            p += snprintf(p, end - p, "step,time_s,%s,action_left,action_right\n",
+                          control_frame_fields());
+            *header_pending = false;
+        }
+        p += snprintf(p, end - p, "%lu,%lu.%06lu", (unsigned long)s.step,
+                      (unsigned long)(s.time_us / 1000000), (unsigned long)(s.time_us % 1000000));
+        for (int i = 0; i < CTRL_FRAME_DIM; i++) {
+            p += snprintf(p, end - p, ",%.4f", s.frame[i]);
+        }
+        p += snprintf(p, end - p, ",%.4f,%.4f\n", s.act[0], s.act[1]);
+    }
+    msg->len = p - msg->data;
+    if (msg->len == 1) {
+        free(msg);
+        return NULL;
+    }
+    return msg;
+}
+
 static void net_tx_task(void *arg)
 {
     TickType_t last_wake = xTaskGetTickCount();
+    int clients_seen = 0;
+    bool state_header_pending = false;
     while (true) {
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(1000 / TELEMETRY_HZ));
 
@@ -403,6 +443,23 @@ static void net_tx_task(void *arg)
         ws_msg_t *tel_msg = build_telemetry();
         if (tel_msg) {
             broadcast(tel_msg);
+        }
+
+        /* The state log is drained even with nobody connected, so a browser
+           never gets the stale rows of an earlier run. A new browser gets
+           the header with its first rows. */
+        int clients = atomic_load(&ws_clients);
+        if (clients > clients_seen) {
+            state_header_pending = true;
+        }
+        clients_seen = clients;
+        ws_msg_t *state_msg = build_state_rows(&state_header_pending);
+        if (state_msg) {
+            if (clients > 0) {
+                broadcast(state_msg);
+            } else {
+                free(state_msg);
+            }
         }
 
         /* With nobody connected, keep the log text buffered so a browser

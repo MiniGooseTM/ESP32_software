@@ -69,13 +69,14 @@
 /* Motors (TB6612)                                                           */
 /* ------------------------------------------------------------------------ */
 
-#define MOTOR_AIN1_GPIO             5
-#define MOTOR_AIN2_GPIO             6
-#define MOTOR_PWMA_GPIO             4
+/* Motor A (left wheel) is wired to the TB6612's B channel and vice versa */
+#define MOTOR_AIN1_GPIO             7
+#define MOTOR_AIN2_GPIO             15
+#define MOTOR_PWMA_GPIO             16
 
-#define MOTOR_BIN1_GPIO             7
-#define MOTOR_BIN2_GPIO             15
-#define MOTOR_PWMB_GPIO             16
+#define MOTOR_BIN1_GPIO             5
+#define MOTOR_BIN2_GPIO             6
+#define MOTOR_PWMB_GPIO             4
 
 /* Policy action 0 drives motor A, action 1 drives motor B. As in training,
    motor A must be the LEFT wheel and motor B the right one (seen from
@@ -98,17 +99,17 @@
 /* Wheel encoders (N20, quadrature, all 4 edges counted)                    */
 /* ------------------------------------------------------------------------ */
 
-#define ENCODER_A_C1_GPIO           39
-#define ENCODER_A_C2_GPIO           38
-#define ENCODER_B_C1_GPIO           18
-#define ENCODER_B_C2_GPIO           8
+#define ENCODER_A_C1_GPIO           18
+#define ENCODER_A_C2_GPIO           8
+#define ENCODER_B_C1_GPIO           39
+#define ENCODER_B_C2_GPIO           38
 
 /* TODO: set from the motor datasheet: encoder PPR * 4 * gear ratio.
    Assumes 7 PPR and a 1:150 gearbox. */
 #define ENCODER_COUNTS_PER_REV      (7.0f * 4.0f * 150.0f)
 /* Encoder sign so that forward wheel rotation counts up */
 #define ENCODER_A_SIGN              (-1)
-#define ENCODER_B_SIGN              (-1)
+#define ENCODER_B_SIGN              (1)
 
 /* ------------------------------------------------------------------------ */
 /* IMU (BMI160 over I2C)                                                     */
@@ -184,3 +185,6 @@
 #define TELEMETRY_HZ                20
 /* Bytes of log text buffered for the browser; lines are dropped if full */
 #define LOG_STREAM_BUFFER_BYTES     8192
+/* Bytes of per-step state log buffered for the browser (68 bytes a step);
+   steps are dropped if full */
+#define STATE_LOG_BUFFER_BYTES      8192
