@@ -410,7 +410,7 @@ static ws_msg_t *build_state_rows(bool *header_pending)
     control_step_t s;
     while (end - p >= STATE_ROW_ROOM && control_take_step(&s)) {
         if (s.step == 0 || *header_pending) {
-            p += snprintf(p, end - p, "step,time_s,%s,action_left,action_right\n",
+            p += snprintf(p, end - p, "step,time_s,%s,action_left,action_right,acc_x,acc_y,acc_z\n",
                           control_frame_fields());
             *header_pending = false;
         }
@@ -419,7 +419,8 @@ static ws_msg_t *build_state_rows(bool *header_pending)
         for (int i = 0; i < CTRL_FRAME_DIM; i++) {
             p += snprintf(p, end - p, ",%.4f", s.frame[i]);
         }
-        p += snprintf(p, end - p, ",%.4f,%.4f\n", s.act[0], s.act[1]);
+        p += snprintf(p, end - p, ",%.4f,%.4f,%.4f,%.4f,%.4f\n", s.act[0], s.act[1],
+                      s.acc[0], s.acc[1], s.acc[2]);
     }
     msg->len = p - msg->data;
     if (msg->len == 1) {

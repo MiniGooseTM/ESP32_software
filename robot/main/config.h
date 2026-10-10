@@ -204,6 +204,6 @@
 #define TELEMETRY_HZ                20
 /* Bytes of log text buffered for the browser; lines are dropped if full */
 #define LOG_STREAM_BUFFER_BYTES     8192
-/* Bytes of per-step state log buffered for the browser (68 bytes a step);
+/* Bytes of per-step state log buffered for the browser (80 bytes a step);
    steps are dropped if full */
 #define STATE_LOG_BUFFER_BYTES      8192

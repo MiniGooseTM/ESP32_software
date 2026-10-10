@@ -59,6 +59,7 @@ typedef struct {
     uint32_t time_us;               /* since start */
     float frame[CTRL_FRAME_DIM];    /* newest observation frame fed to the policy */
     float act[2];                   /* the policy's action, sent to the motors */
+    float acc[3];                   /* m/s^2, body frame (x right, y forward, z up) */
 } control_step_t;
 
 /* Create the control task pinned to CONTROL_CORE. It initialises the IMU and

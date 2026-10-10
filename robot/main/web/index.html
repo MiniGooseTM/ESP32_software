@@ -214,7 +214,7 @@ input[type=range] { flex: 1; min-width: 120px; }
         <span id="csv-status">no rows yet</span>
       </div>
       <pre id="csv" class="term"></pre>
-      <div class="hint">One row per control step (100 Hz) while running: the newest observation frame the policy got, as in training, and the action it returned. <code>step</code> restarts at 0 on every start; gaps in it are rows lost on the way.</div>
+      <div class="hint">One row per control step (100 Hz) while running: the newest observation frame the policy got, as in training, the action it returned, and the raw accelerometer reading (m/s², body frame: x right, y forward, z up). <code>step</code> restarts at 0 on every start; gaps in it are rows lost on the way.</div>
     </section>
   </div>
 </main>

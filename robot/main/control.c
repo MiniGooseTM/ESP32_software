@@ -742,6 +742,7 @@ static void control_task(void *arg)
                 .step = c.run_step++,
                 .time_us = (uint32_t)(now - c.run_start_us),
                 .act = {c.act[0], c.act[1]},
+                .acc = {c.imu.acc[0], c.imu.acc[1], c.imu.acc[2]},
             };
             memcpy(step.frame, frame, sizeof(step.frame));
             xRingbufferSend(step_log, &step, sizeof(step), 0);   /* dropped if full */
