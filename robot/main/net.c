@@ -376,7 +376,7 @@ static ws_msg_t *build_telemetry(void)
                   "\"infer_us\":%.1f,\"infer_us_max\":%.1f,\"busy_us_max\":%.0f,"
                   "\"period_us\":%.1f,\"jitter_us_max\":%.0f,\"overruns\":%lu,"
                   "\"ticks\":%lu,\"imu_errors\":%lu,\"policy\":\"%s\",\"policy_src\":\"%s\",\"policy_crc\":\"%08lx\","
-                  "\"policy_ok\":%d,\"policy_busy\":%d,\"hz\":%d,"
+                  "\"policy_ok\":%d,\"policy_busy\":%d,\"hz\":%d,\"cmd_max\":[%.4f,%.4f],"
                   "\"heap\":%lu,\"batt_mv\":%d,\"batt_pct\":%d,\"batt_low\":%d,\"obs\":[",
                   control_state_name(t.state), t.stop_reason, t.fault,
                   t.pitch_deg, t.pitch_rate_dps,
@@ -385,7 +385,7 @@ static ws_msg_t *build_telemetry(void)
                   t.infer_us, t.infer_us_max, t.busy_us_max,
                   t.period_us_avg, t.jitter_us_max, (unsigned long)t.overruns,
                   (unsigned long)t.ticks, (unsigned long)t.imu_errors, t.policy_name, t.policy_source,
-                  (unsigned long)t.policy_crc, t.policy_ok, t.policy_busy, CONTROL_HZ,
+                  (unsigned long)t.policy_crc, t.policy_ok, t.policy_busy, CONTROL_HZ, CMD_MAX_LIN_VEL, CMD_MAX_ANG_VEL,
                   (unsigned long)esp_get_free_heap_size(), batt_mv, batt_pct, BATTERY_LOW_PERCENT);
     for (int i = 0; i < t.obs_dim && p < end - 16; i++) {
         p += snprintf(p, end - p, i ? ",%.3f" : "%.3f", t.obs[i]);

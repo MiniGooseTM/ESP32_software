@@ -79,6 +79,12 @@ input[type=range] { flex: 1; min-width: 120px; }
 #csv-status { color: var(--muted); font-size: 12px; }
 .log-tools button { padding: 4px 10px; font-weight: 500; }
 .manual-on { outline: 2px solid var(--manual); }
+.replay-on { outline: 2px solid var(--ok); }
+.buttons.one { grid-template-columns: 1fr; margin-top: 8px; }
+select { flex: 1; min-width: 0; font: inherit; padding: 4px; border-radius: 4px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+.row button.small { padding: 4px 10px; font-weight: 500; }
+progress { width: 100%; margin-top: 8px; }
 [hidden] { display: none !important; }
 /* battery: phone-style icon, fill colour by charge */
 #batt { margin-left: auto; position: relative; width: 58px; height: 26px; padding: 2px; margin-right: 5px;
@@ -152,6 +158,19 @@ input[type=range] { flex: 1; min-width: 120px; }
       </div>
       <div class="row readout">command: v <span id="cmd-v">0.00</span> m/s, &omega; <span id="cmd-w">0.00</span> rad/s</div>
       <div class="hint">Drag the pad, or use W A S D / arrow keys.</div>
+    </section>
+
+    <section class="panel" id="replay-panel">
+      <h2>Replay</h2>
+      <div class="row"><input type="file" id="replay-file" accept=".csv,text/csv"></div>
+      <div class="row">
+        <select id="replay-run" aria-label="run to replay" disabled><option>no run loaded</option></select>
+        <button class="small" id="replay-from-log">From state log</button>
+      </div>
+      <div class="buttons one"><button class="start" id="btn-replay" disabled>Replay</button></div>
+      <progress id="replay-progress" max="1" value="0"></progress>
+      <div class="hint" id="replay-status">Load a state log CSV (Download below) to drive a recorded run again.</div>
+      <div class="hint">Sends the run's velocity commands (v_cmd, &omega;_cmd) with their original timing while the policy balances, ignoring the max v / &omega; above. Starts the robot if needed. Stop, Space or touching the pad or drive keys ends it; at the end the robot keeps balancing in place. The replayed run is logged as a new run.</div>
     </section>
 
     <section class="panel">
@@ -239,10 +258,14 @@ function connect() {
     else if (d[0] === "C") { appendCsv(d.slice(1)); }
   };
 }
+let connected = false;
 function setConn(up) {
+  connected = up;
   $("conn").textContent = up ? "connected" : "offline";
   $("conn").className = "badge " + (up ? "running" : "offline");
   if (!up) updateBattery(-1);
+  if (!up && replay) endReplay("Replay ended: connection lost.");
+  updateReplayUi();
 }
 function send(s) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(s); }
 
@@ -251,6 +274,7 @@ $("btn-start").onclick = () => { $("manual").checked = false; updateManual(); se
 $("btn-stop").onclick = () => stop();
 $("btn-calib").onclick = () => send("calib");
 function stop() {
+  if (replay) endReplay("Replay stopped.");
   $("manual").checked = false; updateManual();
   setPad(0, 0); keys.clear();
   send("stop");
@@ -296,7 +320,9 @@ function padFromEvent(e) {
   const b = pad.getBoundingClientRect();
   setPad((e.clientX - b.left) / b.width * 2 - 1, -((e.clientY - b.top) / b.height * 2 - 1));
 }
-pad.addEventListener("pointerdown", (e) => { dragging = true; pad.setPointerCapture(e.pointerId); padFromEvent(e); });
+pad.addEventListener("pointerdown", (e) => {
+  if (replay) endReplay("Replay ended: taken over with the pad.");
+  dragging = true; pad.setPointerCapture(e.pointerId); padFromEvent(e); });
 pad.addEventListener("pointermove", (e) => { if (dragging) padFromEvent(e); });
 const release = () => { dragging = false; setPad(0, 0); };
 pad.addEventListener("pointerup", release);
@@ -308,7 +334,11 @@ document.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT" && e.target.type === "number") return;
   const k = e.key.toLowerCase();
   if (k === " " || k === "escape") { e.preventDefault(); stop(); $("batt-popup").hidden = true; return; }
-  if (KEYMAP[k]) { e.preventDefault(); keys.add(KEYMAP[k]); }
+  if (KEYMAP[k]) {
+    e.preventDefault();
+    if (replay) endReplay("Replay ended: taken over with the keyboard.");
+    keys.add(KEYMAP[k]);
+  }
 });
 document.addEventListener("keyup", (e) => { const k = KEYMAP[e.key.toLowerCase()]; if (k) keys.delete(k); });
 window.addEventListener("blur", () => { keys.clear(); release(); });
@@ -337,12 +367,134 @@ $("ma").oninput = updateManual;
 $("mb").oninput = updateManual;
 $("mzero").onclick = () => { $("ma").value = 0; $("mb").value = 0; updateManual(); };
 
+/* ---- replay a recorded run ----
+   Sends the velocity commands of a state log run again, at the times they
+   had in the run, while the policy balances as usual. The log stores them
+   divided by the command limits, which the telemetry reports (cmd_max). */
+const REPLAY_START_TIMEOUT_MS = 1500;
+let replayRuns = [];   /* {rows: [[t s from the run's first row, v_cmd, omega_cmd]], duration} */
+let replay = null;     /* {run, label, index, t0, running} while replaying */
+let robotState = "", cmdMax = null;
+
+/* A file may hold several runs: step restarts at 0 for each */
+function parseRuns(text) {
+  const runs = [];
+  let col = null, rows = null, lastStep = -1;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const v = line.split(",");
+    if (v[0] === "step") {
+      col = { t: v.indexOf("time_s"), v: v.indexOf("v_cmd"), w: v.indexOf("omega_cmd") };
+      if (col.t < 0 || col.v < 0 || col.w < 0) throw new Error("the header has no time_s, v_cmd or omega_cmd");
+      continue;
+    }
+    if (!col) throw new Error("no header line (step,time_s,...) before the rows");
+    const r = [parseFloat(v[0]), parseFloat(v[col.t]), parseFloat(v[col.v]), parseFloat(v[col.w])];
+    if (!r.every(Number.isFinite)) continue;
+    if (!rows || r[0] <= lastStep) { rows = []; runs.push(rows); }
+    lastStep = r[0];
+    rows.push(r.slice(1));
+  }
+  return runs.map((rows) => {
+    const t0 = rows[0][0];
+    for (const r of rows) r[0] -= t0;
+    return { rows, duration: rows[rows.length - 1][0] };
+  });
+}
+function setReplayStatus(text) { $("replay-status").textContent = text; }
+function loadRuns(text, source) {
+  let problem = "no rows";
+  try {
+    replayRuns = parseRuns(text);
+  } catch (e) {
+    replayRuns = [];
+    problem = e.message;
+  }
+  const sel = $("replay-run");
+  sel.innerHTML = "";
+  replayRuns.forEach((run, i) => {
+    const o = document.createElement("option");
+    o.value = i;
+    o.textContent = `Run ${i + 1}: ${run.duration.toFixed(1)} s, ${run.rows.length} rows`;
+    sel.appendChild(o);
+  });
+  if (replayRuns.length) {
+    sel.value = replayRuns.length - 1;   /* the newest */
+    setReplayStatus(`${source}: ${replayRuns.length} run${replayRuns.length > 1 ? "s" : ""}.`);
+  } else {
+    sel.innerHTML = "<option>no run loaded</option>";
+    setReplayStatus(`${source}: ${problem}.`);
+  }
+  updateReplayUi();
+}
+$("replay-file").onchange = async () => {
+  const file = $("replay-file").files[0];
+  if (file) loadRuns(await file.text(), file.name);
+};
+$("replay-from-log").onclick = () => loadRuns(csvEl.textContent, "State log");
+
+function updateReplayUi() {
+  const active = !!replay;
+  const b = $("btn-replay");
+  b.textContent = active ? "Cancel replay" : "Replay";
+  b.className = active ? "" : "start";
+  b.disabled = !active && (!replayRuns.length || !connected || !cmdMax);
+  $("replay-file").disabled = $("replay-from-log").disabled = active;
+  $("replay-run").disabled = active || !replayRuns.length;
+  $("replay-panel").classList.toggle("replay-on", active);
+  if (!active) $("replay-progress").value = 0;
+}
+function startReplay() {
+  const i = +$("replay-run").value;
+  const run = replayRuns[i];
+  if (!run || !cmdMax) return;
+  $("manual").checked = false; updateManual();
+  setPad(0, 0); keys.clear();
+  replay = { run, label: `Run ${i + 1}`, index: 0, t0: performance.now(), running: robotState === "running" };
+  if (!replay.running) send("start");
+  setReplayStatus(`${replay.label}: starting...`);
+  updateReplayUi();
+}
+function endReplay(text) {
+  replay = null;
+  setReplayStatus(text);
+  updateReplayUi();
+}
+$("btn-replay").onclick = () => (replay ? endReplay("Replay cancelled.") : startReplay());
+
+/* The command the run had at this point of the replay (held between rows) */
+function replayCommand() {
+  const ms = performance.now() - replay.t0;
+  const rows = replay.run.rows;
+  if (!replay.running && ms > REPLAY_START_TIMEOUT_MS) {
+    endReplay("Replay ended: the robot didn't start, see the log.");
+    return [0, 0];
+  }
+  if (ms / 1000 > replay.run.duration) {
+    endReplay(`${replay.label} replayed.`);
+    return [0, 0];
+  }
+  while (replay.index + 1 < rows.length && rows[replay.index + 1][0] <= ms / 1000) replay.index++;
+  const [, v, w] = rows[replay.index];
+  $("replay-progress").value = replay.run.duration > 0 ? ms / 1000 / replay.run.duration : 1;
+  setReplayStatus(`${replay.label}: ${(ms / 1000).toFixed(1)} / ${replay.run.duration.toFixed(1)} s`);
+  return [v * cmdMax[0], w * cmdMax[1]];
+}
+function replayOnTelemetry(t) {
+  if (!replay) return;
+  if (t.state === "running") {
+    replay.running = true;
+  } else if (replay.running) {
+    endReplay(`Replay ended: robot ${t.state}${t.reason ? ` (${t.reason})` : ""}.`);
+  }
+}
+
 /* ---- periodic send: the command doubles as the heartbeat ---- */
 setInterval(() => {
   if ($("manual").checked) {
     send(`act ${(+$("ma").value).toFixed(3)} ${(+$("mb").value).toFixed(3)}`);
   } else {
-    const [v, w] = currentCommand();
+    const [v, w] = replay ? replayCommand() : currentCommand();
     $("cmd-v").textContent = v.toFixed(2);
     $("cmd-w").textContent = w.toFixed(2);
     send(`cmd ${v.toFixed(3)} ${w.toFixed(3)}`);
@@ -392,6 +544,10 @@ function onTelemetry(t) {
     : "none";
   policyIdle = t.state === "idle" && !t.policy_busy;
   updatePolicyButtons();
+  robotState = t.state;
+  cmdMax = t.cmd_max || null;
+  replayOnTelemetry(t);
+  updateReplayUi();
   $("obs").textContent = (t.obs || []).map((x, i) => `${OBS_NAMES[i] || i} ${f(x, 3)}`).join("   ");
   hist.push([t.pitch, t.act[0], t.act[1]]);
   if (hist.length > HISTORY) hist.shift();

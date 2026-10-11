@@ -33,6 +33,8 @@ The robot stops on its own in these cases:
 
 **Motor test** drives each wheel directly. Use it with the wheels off the ground to check that +1 turns both wheels forward. Also check that motor A is the left wheel. Then fix `MOTOR_x_SIGN` and `ENCODER_x_SIGN` in `main/config.h` if needed.
 
+**Replay** drives a recorded run again. Download the state log CSV, or press **From state log** to use the runs on the page now. Pick a run and press **Replay**. The page sends that run's velocity commands (`v_cmd`, `omega_cmd`) with their original timing, at the usual 20 Hz, and the policy balances as in any other run. The robot is started first if it is idle. Stop, Space, or touching the pad or drive keys ends the replay. When the run is over, the command drops to zero and the robot keeps balancing. The replay is logged as a new run, so you can compare it with the original.
+
 ## Loading a trained policy
 
 A policy is the file `models/policy.bin` that `make export` writes in `software_stack`. The default model is `models/ppo_balance.zip`; pick another with `EXPORT_ARGS="--model <zip>"`. The format is described in `main/policy_net.h`. The firmware has two sources for it:
