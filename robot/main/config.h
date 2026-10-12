@@ -56,8 +56,8 @@
    are clamped to it and then scaled down together so the outer wheel needs
    at most CMD_MAX_LIN_VEL, as wheel_feasible_command() does in training.
    The observation divides the command by these. */
-#define CMD_MAX_LIN_VEL             0.5f    /* m/s */
-#define CMD_MAX_ANG_VEL             3.0f    /* rad/s */
+#define CMD_MAX_LIN_VEL             0.4f    /* m/s */
+#define CMD_MAX_ANG_VEL             2.5f    /* rad/s */
 
 /* Half the distance between the wheel centres in the MuJoCo model */
 #define WHEEL_HALF_TRACK_M          0.0535f
