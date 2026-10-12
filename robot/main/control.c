@@ -388,6 +388,7 @@ typedef struct {
     uint32_t imu_errors;
     float roll;                 /* rad, right lean positive */
     float pitch;                /* rad, forward lean negative */
+    float up[3];                /* estimated up direction, body frame, unit length */
 
     int32_t last_counts[NUM_MOTORS];
     float wheel_vel[NUM_MOTORS];
@@ -409,6 +410,48 @@ typedef struct {
     /* last completed window */
     float pub_infer_max, pub_busy_max, pub_jitter_max, pub_period_avg;
 } ctrl_t;
+
+/* Start the tilt estimate from gravity alone (robot at rest) */
+static void tilt_reset(ctrl_t *c)
+{
+    const float *a = c->imu.acc;
+    float n = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+    if (n < 1e-3f) {
+        return;
+    }
+    for (int i = 0; i < 3; i++) {
+        c->up[i] = a[i] / n;
+    }
+    accel_tilt(&c->imu, &c->roll, &c->pitch);
+}
+
+/* Complementary filter on the "up" vector: rotate it with the full gyro, so yawing while
+   tilted doesn't leak into pitch/roll (filtering each angle with its own gyro axis drifted
+   ~0.1 rad during fast spins), then blend it toward the accelerometer. Pitch and roll use
+   the same formulas as accel_tilt(). */
+static void tilt_update(ctrl_t *c, float dt)
+{
+    const float *w = c->imu.gyro, *a = c->imu.acc;
+    float *u = c->up;
+    /* du/dt = u x w for a world-fixed vector seen from the rotating body */
+    float next[3] = {
+        u[0] + (u[1] * w[2] - u[2] * w[1]) * dt,
+        u[1] + (u[2] * w[0] - u[0] * w[2]) * dt,
+        u[2] + (u[0] * w[1] - u[1] * w[0]) * dt,
+    };
+    float an = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+    if (an > 1e-3f) {
+        for (int i = 0; i < 3; i++) {
+            next[i] = TILT_FILTER_ALPHA * next[i] + (1.0f - TILT_FILTER_ALPHA) * a[i] / an;
+        }
+    }
+    float n = sqrtf(next[0] * next[0] + next[1] * next[1] + next[2] * next[2]);
+    for (int i = 0; i < 3; i++) {
+        u[i] = next[i] / n;
+    }
+    c->pitch = atan2f(u[1], u[2]);
+    c->roll = atan2f(-u[0], hypotf(u[1], u[2]));
+}
 
 static void stop_motors(ctrl_t *c, ctrl_state_t next, const char *reason, int fault)
 {
@@ -476,7 +519,7 @@ static void run_calibration(ctrl_t *c)
         log_deferred(ESP_LOG_INFO, "Calibration done");
     }
     if (imu_read_body(&c->imu) == ESP_OK) {
-        accel_tilt(&c->imu, &c->roll, &c->pitch);
+        tilt_reset(c);
     }
     c->state = CTRL_STATE_IDLE;
 
@@ -541,6 +584,7 @@ static void control_task(void *arg)
         .state = CTRL_STATE_INIT,
         .stop_reason = "",
         .obs_restart = true,
+        .up = {0.0f, 0.0f, 1.0f},
     };
 
     /* ---- init: everything here runs on core 1 ---- */
@@ -556,7 +600,7 @@ static void control_task(void *arg)
     }
 
     if (imu_read_body(&c.imu) == ESP_OK) {
-        accel_tilt(&c.imu, &c.roll, &c.pitch);
+        tilt_reset(&c);
     }
     encoders_read(c.last_counts);
 
@@ -611,13 +655,7 @@ static void control_task(void *arg)
         /* ---- 2. sense ---- */
         if (imu_read_body(&c.imu) == ESP_OK) {
             c.imu_consecutive_errors = 0;
-            float acc_roll, acc_pitch;
-            accel_tilt(&c.imu, &acc_roll, &acc_pitch);
-            /* Pitch is the rotation about body x, roll about body y */
-            c.pitch = TILT_FILTER_ALPHA * (c.pitch + c.imu.gyro[0] * dt)
-                      + (1.0f - TILT_FILTER_ALPHA) * acc_pitch;
-            c.roll = TILT_FILTER_ALPHA * (c.roll + c.imu.gyro[1] * dt)
-                     + (1.0f - TILT_FILTER_ALPHA) * acc_roll;
+            tilt_update(&c, dt);
         } else {
             /* Keep the previous sample for this step */
             c.imu_errors++;
