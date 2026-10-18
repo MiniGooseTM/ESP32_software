@@ -15,6 +15,4 @@ idf_component_register(SRCS "main.c"
                        # Built-in policy, from `make export` in software_stack
                        EMBED_FILES "policy.bin")
 
-# The policy forward pass is the hot path; optimise it for speed regardless of
-# the project-wide optimisation level.
 set_source_files_properties(policy_net.c PROPERTIES COMPILE_OPTIONS "-O3")

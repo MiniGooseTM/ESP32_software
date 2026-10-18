@@ -1,9 +1,4 @@
-/* The robot's MLP policy and where it comes from, see policy.h
-
-   policy_net.c does the parsing and the math; this file finds the policy
-   file (embedded in the firmware or in the "policy" flash partition) and
-   keeps the active one in internal RAM.
-*/
+/* The robot's MLP policy and where it comes from, see policy.h*/
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -63,7 +58,6 @@ static void unload(void)
     }
 }
 
-/* Map the partition read-only; the pointer is page aligned */
 static const char *map_store(const void **data, esp_partition_mmap_handle_t *handle)
 {
     const esp_partition_t *partition = store_partition();
@@ -163,7 +157,6 @@ float policy_benchmark_us(void)
     return (float)cycles / BENCH_ITERATIONS / CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ;
 }
 
-/* ---- the uploaded policy's flash partition ------------------------------ */
 
 size_t policy_store_capacity(void)
 {
@@ -211,7 +204,6 @@ const char *policy_store_check(const char *(*check)(const policy_net_t *net))
 
 bool policy_store_empty(void)
 {
-    /* Erased, or whatever was in that flash before the partition existed */
     const esp_partition_t *partition = store_partition();
     char magic[4];
     if (!partition || esp_partition_read(partition, 0, magic, sizeof(magic)) != ESP_OK) {

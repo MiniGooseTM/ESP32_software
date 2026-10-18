@@ -1,11 +1,8 @@
-/* Copies ESP_LOG output into a buffer the web interface drains, and gives the
-   control task a logging call that never blocks. */
 #pragma once
 
 #include <stddef.h>
 #include "esp_log.h"
 
-/* Install the log hook. Call once, early in app_main. */
 void log_stream_init(void);
 
 /* Queue a log message without touching the UART. Formats into a ring buffer

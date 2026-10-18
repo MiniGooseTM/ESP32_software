@@ -42,12 +42,6 @@ static const char *TAG = "control";
 #define POLICY_TEST_MAX_ERROR       1e-4f
 #define POLICY_RELOAD_TIMEOUT_MS    3000
 
-/* ======================================================================== */
-/* Observation: must match the training environment exactly                 */
-/* (ACTOR_FRAME_FIELDS and _actor_frame() in envs/balance_env.py).          */
-/* The policy file carries a CRC of the training field names; it must      */
-/* match OBS_FRAME_FIELDS (policy_mismatch() below).                        */
-/* ======================================================================== */
 
 typedef struct {
     float gyro[3];          /* rad/s, body frame (x right, y forward, z up) */
@@ -104,9 +98,6 @@ static bool nearly_equal(float a, float b)
     return fabsf(a - b) <= 1e-4f * fmaxf(1.0f, fabsf(b));
 }
 
-/* The policy must have been trained with exactly this observation and
-   these limits, and its forward pass must reproduce the SB3 actions stored
-   with it. Called for the policy being loaded and for an upload. */
 const char *control_check_policy(const policy_net_t *net)
 {
     const policy_file_header_t *h = net->header;
@@ -130,7 +121,7 @@ const char *control_check_policy(const policy_net_t *net)
     if (!nearly_equal(h->wheel_no_load_speed, WHEEL_MAX_SPEED_RAD_S)) {
         return "WHEEL_MAX_SPEED_RAD_S";
     }
-    /* On the heap: this also runs on the main task, which has a small stack */
+
     float *bufs = malloc(2 * POLICY_MAX_WIDTH * sizeof(float));
     if (!bufs) {
         return "out of memory for the self-test";
@@ -149,19 +140,16 @@ const char *control_check_policy(const policy_net_t *net)
 #define REQ_STOP        (1u << 1)
 #define REQ_CALIBRATE   (1u << 2)
 #define REQ_MANUAL      (1u << 3)
-#define REQ_POLICY      (1u << 4)   /* load the policy again */
+#define REQ_POLICY      (1u << 4)   
 
 typedef struct {
     float lin, ang;
     float manual[2];
     int64_t last_cmd_us;
     uint32_t requests;
-    bool policy_busy;               /* a policy upload is in progress */
+    bool policy_busy;               
 } command_t;
 
-/* The active policy as the control loop sees it. Written by select_policy()
-   only: in control_start() before the control task runs, then only by the
-   control task. */
 static struct {
     bool ok;                        /* loaded and checked: start allowed */
     float tilt_limit;               /* rad, motors are cut past this roll or pitch */
@@ -185,7 +173,6 @@ static control_telemetry_t shared_telemetry = {
     .stop_reason = "",
 };
 
-/* ---- interface for other tasks ----------------------------------------- */
 
 static float clampf(float v, float lo, float hi)
 {
@@ -199,7 +186,6 @@ void control_set_command(float lin, float ang)
 {
     lin = clampf(lin, -CMD_MAX_LIN_VEL, CMD_MAX_LIN_VEL);
     ang = clampf(ang, -CMD_MAX_ANG_VEL, CMD_MAX_ANG_VEL);
-    /* Keep the outer wheel within the full speed, as in training */
     float outer_wheel = fabsf(lin) + fabsf(ang) * WHEEL_HALF_TRACK_M;
     if (outer_wheel > CMD_MAX_LIN_VEL) {
         float scale = CMD_MAX_LIN_VEL / outer_wheel;
@@ -320,7 +306,6 @@ const char *control_state_name(ctrl_state_t state)
     return "?";
 }
 
-/* ---- control task ------------------------------------------------------- */
 
 static bool IRAM_ATTR on_timer_alarm(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *ctx)
 {
@@ -587,14 +572,12 @@ static void control_task(void *arg)
         .up = {0.0f, 0.0f, 1.0f},
     };
 
-    /* ---- init: everything here runs on core 1 ---- */
     control_task_handle = xTaskGetCurrentTaskHandle();
     while (imu_init() != ESP_OK) {
         ESP_LOGE(TAG, "IMU init failed, retrying in 2 s (motors stay off)");
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
 
-    /* The policy itself was chosen in control_start(); time it on this core */
     if (active_policy.ok) {
         log_deferred(ESP_LOG_INFO, "Policy inference %.1f us", policy_benchmark_us());
     }
@@ -635,7 +618,6 @@ static void control_task(void *arg)
             if (jitter > c.win_jitter_max) {
                 c.win_jitter_max = jitter;
             }
-            /* Use the real interval, but don't let one hiccup wreck the filter */
             dt = fminf(fmaxf(period, 0.5f * PERIOD_US), 2.0f * PERIOD_US) * 1e-6f;
         }
         c.last_tick_us = now;
@@ -657,7 +639,6 @@ static void control_task(void *arg)
             c.imu_consecutive_errors = 0;
             tilt_update(&c, dt);
         } else {
-            /* Keep the previous sample for this step */
             c.imu_errors++;
             c.imu_consecutive_errors++;
         }
@@ -809,7 +790,6 @@ static void control_task(void *arg)
 
 void control_start(void)
 {
-    /* Before the WiFi takes its share of the internal RAM */
     select_policy();
     step_log = xRingbufferCreate(STATE_LOG_BUFFER_BYTES, RINGBUF_TYPE_NOSPLIT);
     configASSERT(step_log);

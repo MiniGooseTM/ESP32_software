@@ -1,10 +1,4 @@
-/* Policy file parsing and MLP forward pass, see policy_net.h
-
-   Plain C on the ESP32-S3's single-precision FPU. For the network sizes a
-   PPO balancing policy uses (a few ten thousand multiply-adds) this beats
-   TFLite Micro, whose per-op dispatch and unoptimised float kernels cost
-   more than the math itself. policy_benchmark_us() measures the real time.
-*/
+/* Policy file parsing and MLP forward pass, see policy_net.h*/
 #include <math.h>
 #include <string.h>
 #include "policy_net.h"

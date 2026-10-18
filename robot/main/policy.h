@@ -1,13 +1,4 @@
-/* The robot's MLP policy and where it comes from.
-
-   A policy is a policy file (format in policy_net.h) written by
-   `make export` in software_stack. There are two sources:
-     built-in   main/policy.bin, embedded in the firmware
-     uploaded   the "policy" flash partition, written through the web page
-
-   Loading, unloading and policy_forward() are not thread-safe: the control
-   module does them from one task at a time, and never while the web server
-   is storing an upload (control_begin_policy_update()). */
+/* The robot's MLP policy and where it comes from.*/
 #pragma once
 
 #include <stdbool.h>
