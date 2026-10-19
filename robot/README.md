@@ -1,4 +1,4 @@
-# Balancing robot firmware
+# Mini Goose firmware
 
 Runs a learned PPO policy on the ESP32-S3. On each control tick it reads the BMI160 IMU and the wheel encoders, evaluates the policy, and drives the two TB6612 motors. A WiFi web page shows the logs and telemetry, sends velocity commands and starts the IMU calibration.
 
@@ -14,11 +14,11 @@ idf.py build flash monitor
 
 1. Join the WiFi network `goose` with the password `goosegoose`, then open http://192.168.4.1.
 2. Press **Calibrate** once while holding the robot still and upright. The offsets are saved in flash and restored on every boot.
-3. Hold the robot upright and press **Start**. Drive with the pad or with W A S D. Space or Esc stops it.
+3. Hold the robot upright and press **Start**. Drive with the pad or with the arrow keys. Space or Esc stops it.
 
 The robot stops on its own in these cases:
 
-- Its pitch or roll passes the policy's training tilt limit (0.6 rad, 34 deg) while balancing, or `FALL_ANGLE_DEG` in the motor test.
+- Its pitch or roll passes the policy's training tilt limit while balancing..
 - The IMU fails to respond.
 - The browser stops sending commands. After `CMD_TIMEOUT_MS` the command drops to zero, and after `LINK_LOST_STOP_MS` the motors are cut.
 
@@ -31,7 +31,6 @@ The robot stops on its own in these cases:
 
 `wheel L` must be the left wheel. If a value is wrong, fix `IMU_BODY_*` or `ENCODER_x_SIGN` in `main/config.h`.
 
-**Motor test** drives each wheel directly. Use it with the wheels off the ground to check that +1 turns both wheels forward. Also check that motor A is the left wheel. Then fix `MOTOR_x_SIGN` and `ENCODER_x_SIGN` in `main/config.h` if needed.
 
 **Replay** drives a recorded run again. Download the state log CSV, or press **From state log** to use the runs on the page now. Pick a run and press **Replay**. The page sends that run's velocity commands (`v_cmd`, `omega_cmd`) with their original timing, at the usual 20 Hz, and the policy balances as in any other run. The robot is started first if it is idle. Stop, Space, or touching the pad or drive keys ends the replay. When the run is over, the command drops to zero and the robot keeps balancing. The replay is logged as a new run, so you can compare it with the original.
 
@@ -85,6 +84,3 @@ The two cores share state through small spinlock-protected copies. The control t
 
 The web page shows the loop period, jitter, overruns and inference time. Use them to confirm that WiFi traffic does not disturb the loop.
 
-## Inference backend
-
-The policy runs as plain C float code instead of TFLite Micro. Most of a TFLite Micro run for a small MLP goes to interpreter and per-op overhead. Its float kernels are the unoptimised reference ones, and int8 quantisation would add error and about 300 KB of flash. The boot log and the web page report the measured inference time.

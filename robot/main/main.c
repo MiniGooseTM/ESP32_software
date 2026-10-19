@@ -1,5 +1,4 @@
-/* Two-wheeled balancing robot firmware
-
+/*   
    Core 1: control loop only (IMU -> policy -> motors at CONTROL_HZ).
    Core 0: WiFi access point, web interface, log streaming, status LED,
            battery monitor.
@@ -70,7 +69,6 @@ static void status_led_task(void *arg)
 
 void app_main(void)
 {
-    /* Motor pins into a safe (coasting) state before anything else */
     motors_init();
 
     log_stream_init();

@@ -1,11 +1,3 @@
-/* Log tee to the web interface
-
-   esp_log_set_vprintf() routes every ESP_LOGx line through log_vprintf(),
-   which copies it into a ring buffer and then hands it to the original
-   vprintf so the serial console keeps working. The network task drains the
-   ring buffer and sends the text to the browser. Nothing here ever waits:
-   if the buffer is full the line is dropped from the web view.
-*/
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>

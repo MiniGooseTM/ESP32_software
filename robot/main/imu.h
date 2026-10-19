@@ -1,4 +1,3 @@
-/* BMI160 IMU over I2C */
 #pragma once
 
 #include "esp_err.h"

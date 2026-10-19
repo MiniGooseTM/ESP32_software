@@ -3,12 +3,6 @@
    Register-level driver adapted from imu_test/main/imu_test_main.c.
    Register addresses and values are from the Bosch BMI160 datasheet
    (BST-BMI160-DS000-09, rev 1.0).
-
-   Wiring: SDA -> IMU_SDA_GPIO, SCL -> IMU_SCL_GPIO, CS -> 3V3 (selects I2C),
-   SAO/SDO -> GND (0x68) or 3V3 (0x69); both addresses are probed.
-
-   The FOC offsets live in volatile chip registers, so after a calibration
-   they are saved to NVS and written back on every boot.
 */
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -45,8 +39,6 @@ static const char *TAG = "imu";
 
 #define BMI160_CHIP_ID          0xD1
 
-/* Bus idle time needed after every write: 2 us in normal mode, 450 us in
-   suspend mode (datasheet 3.2.4). Writes sent sooner are silently dropped. */
 #define BMI160_WRITE_IDLE_US    500
 
 #define BMI160_CMD_START_FOC    0x03
@@ -60,7 +52,6 @@ static const char *TAG = "imu";
 
 #define BMI160_ACC_RANGE_4G     0x05
 #define ACC_LSB_PER_G           8192.0f
-/* Widest range so a fall or a knock never clips the gyro */
 #define BMI160_GYR_RANGE_2000DPS 0x00
 #define GYR_LSB_PER_DPS         16.4f
 
@@ -91,8 +82,6 @@ static esp_err_t bmi160_write(uint8_t reg, uint8_t value)
     return err;
 }
 
-/* Write a register and read it back, since a wrong range would silently
-   scale every reading wrongly */
 static esp_err_t bmi160_write_verified(uint8_t reg, uint8_t value)
 {
     ESP_RETURN_ON_ERROR(bmi160_write(reg, value), TAG, "write 0x%02X failed", reg);

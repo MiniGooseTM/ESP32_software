@@ -1,7 +1,3 @@
-/* Fixed-rate control loop on core 1 and its thread-safe interface.
-
-   Every function here except control_start() can be called from any task on
-   either core; none of them block on the control loop. */
 #pragma once
 
 #include <stdbool.h>
@@ -24,7 +20,7 @@ typedef struct {
     const char *stop_reason;    /* why the robot last stopped, "" if it hasn't */
     int fault;                  /* last stop was a fault (fall, IMU error, link lost) */
 
-    float pitch_deg;            /* forward lean negative, as in training */
+    float pitch_deg;            /* forward lean negative */
     float pitch_rate_dps;
     float gyro[3];              /* rad/s, body frame (x right, y forward, z up) */
     float acc[3];               /* m/s^2, body frame */
